@@ -1,10 +1,12 @@
 # AI Market Intelligence & Trading Signal System — Implementation Plan
 
-**Version**: 1.1 | **Date**: 2026-03-26 | **Constitution**: `.specify/memory/constitution.md`
+**Version**: 2.0 | **Date**: 2026-03-28 | **Constitution**: `.specify/memory/constitution.md` (v1.1.0)
 
 ## Context
 
-Build an AI-driven market analysis system (Quant AI Trading Research Engine) that monitors XAU/USD, analyzes charts + news sentiment, produces high-confidence BUY/SELL signals with strict risk management, and delivers them via Telegram. Later: 10 assets, semi-automatic trading, cloud deployment.
+Build an AI-driven market analysis system that monitors XAU/USD, analyzes charts + news sentiment via ML models (FinBERT, LSTM, XGBoost, GPT-2B OSS), produces high-confidence BUY/SELL signals with strict risk management, and delivers them via Telegram. Later: 10 assets, semi-automatic trading, cloud deployment.
+
+All ML models run **locally** (CPU with optional GPU). External APIs are used only for market data and news retrieval.
 
 ---
 
@@ -26,11 +28,12 @@ Build an AI-driven market analysis system (Quant AI Trading Research Engine) tha
         +------------------------------------+
         |         Signal Intelligence        |
         |                                    |
-        |  News Agent      Sentiment Agent   |
-        |       |                |           |
-        |       +--------+------+           |
-        |                v                   |
-        |         Signal Decision AI         |
+        |  News Agent  →  FinBERT Sentiment  |
+        |  Market Data →  LSTM Prediction    |
+        |                                    |
+        |  All features → XGBoost Scoring    |
+        |                                    |
+        |  If threshold → GPT-2B Reasoning   |
         +---------------+--------------------+
                         |
                         v
@@ -49,13 +52,17 @@ Build an AI-driven market analysis system (Quant AI Trading Research Engine) tha
 ## Data Pipeline
 
 ```
-market data --> indicators --> pattern detection
+market data --> indicators --> pattern detection ─┐
+                                                  │
+market data --> LSTM prediction ──────────────────┤
+                                                  ├─> XGBoost probability
+news ──────--> FinBERT sentiment ─────────────────┤
+                                                  │
+                volatility metrics ───────────────┘
                        |
-                    scoring
+                 if >= threshold
                        |
-news --> sentiment --> macro score
-                       |
-             signal decision engine
+                 GPT-2B reasoning
                        |
                  risk manager
                        |
@@ -63,6 +70,29 @@ news --> sentiment --> macro score
                        |
              performance tracker
 ```
+
+---
+
+## Local-First Architecture
+
+Per constitution v1.1, the system must operate fully locally:
+
+| Constraint | Implementation |
+|-----------|---------------|
+| CPU execution | All models support CPU inference; torch with `device="cpu"` default |
+| Optional GPU | Auto-detect CUDA/MPS via `torch.cuda.is_available()`; config override |
+| Offline after install | All model weights downloaded once at setup; no runtime cloud deps for inference |
+| Low memory | Batch inference, model unloading between cycles, quantized models where possible |
+| External APIs | Market data (TwelveData/AlphaVantage/Polygon) and news RSS only |
+
+Model sizes (approximate):
+
+| Model | Size | RAM | Notes |
+|-------|------|-----|-------|
+| FinBERT | ~440 MB | ~1 GB | `ProsusAI/finbert` via transformers |
+| LSTM | ~5-50 MB | ~200 MB | Custom trained, lightweight |
+| XGBoost | ~1-10 MB | ~100 MB | Trained on tabular features |
+| GPT-2B OSS | ~500 MB–6 GB | ~2-8 GB | Size depends on chosen variant; quantized recommended |
 
 ---
 
@@ -74,13 +104,17 @@ These decisions override the original ChatGPT plan where they conflict:
 |----------|--------------|---------|
 | Risk Management | Phase 5 | **Phase 1** — constitution requires risk on every signal |
 | Market Data Provider | TwelveData hardcoded | **Provider abstraction** (ABC) — swap providers via config |
-| LLM for Sentiment | Unspecified | **LLM abstraction** — OpenAI, Claude, or keyword fallback via config |
+| Sentiment Analysis | Unspecified LLM | **FinBERT** — local financial sentiment model, no API dependency |
+| Time Series Prediction | None | **LSTM** — local model for price direction and volatility prediction |
+| Signal Probability | Weighted formula | **XGBoost** — trained model combining all features into probability |
+| Signal Explanation | Template strings | **GPT-2B OSS** — local LLM for human-readable reasoning |
 | News Sources | Twitter/X + NewsAPI | **RSS feeds only** (free, no API cost) |
 | Backtest Data | Same API provider | **CSV loader** as primary source |
 | Execution Loop | Fixed 5 min | **Per-timeframe intervals** (5m/15m/1h/4h each on own schedule) |
 | Starting Capital | $10,000 hardcoded | **Configurable** via `.env` |
 | Telegram Bot | Assumed ready | **Built for deferred config** — runs without token in dev mode |
 | Circular Deps | Not addressed | **`core/types.py`** as sole inter-agent contract layer |
+| Deployment | Cloud assumed | **Local-first** — CPU default, optional GPU, offline inference |
 
 ---
 
@@ -95,7 +129,8 @@ All files under project root.
 | `main.py` | Entry point: init config, logger, DB, scheduler, Telegram bot, graceful shutdown |
 | `requirements.txt` | Pinned dependencies |
 | `.env.example` | Template for API keys, Telegram token, capital, thresholds |
-| `.gitignore` | Python, .env, SQLite, logs, IDE files |
+| `.gitignore` | Python, .env, SQLite, logs, IDE files, model weights |
+| `setup_models.py` | One-time script: download FinBERT + GPT-2B weights, create LSTM/XGBoost placeholders |
 
 ### `core/` — Shared Infrastructure
 
@@ -103,9 +138,9 @@ All files under project root.
 |------|---------|
 | `core/__init__.py` | Package |
 | `core/types.py` | **All inter-agent data contracts** as frozen dataclasses — the ONLY module that every agent imports. No agent imports another agent's types. |
-| `core/config.py` | Loads `.env` via python-dotenv, exposes `AppConfig` dataclass (API keys, risk params, scoring weights, intervals, capital) |
+| `core/config.py` | Loads `.env` via python-dotenv, exposes `AppConfig` dataclass (API keys, risk params, model paths, intervals, capital) |
 | `core/logger.py` | Rotating file handler + console via `get_logger(name)` factory |
-| `core/scheduler.py` | APScheduler wrapper with per-timeframe job scheduling. Orchestrates: data -> analysis -> signal -> risk -> delivery -> log |
+| `core/scheduler.py` | APScheduler wrapper with per-timeframe job scheduling. Orchestrates full pipeline. |
 
 ### `data/` — Data Collection
 
@@ -124,15 +159,27 @@ All files under project root.
 | `analysis/indicators.py` | **Chart Analysis Agent**: RSI(14), MACD(12,26,9), EMA(20,50,200), Bollinger Bands(20,2), ATR(14), support/resistance via swing high/low pivot points, trend direction via EMA alignment. Returns `IndicatorResult`. |
 | `analysis/pattern_detection.py` | **Pattern Detection Agent**: rule-based detectors — breakout, triangle, double top/bottom, head & shoulders, trading range. Each pattern function returns confidence 0.0-1.0. |
 
+### `models/` — ML Model Management
+
+| File | Purpose |
+|------|---------|
+| `models/__init__.py` | Package |
+| `models/finbert.py` | **FinBERT wrapper**: loads `ProsusAI/finbert` via transformers, classifies financial text as Bullish/Bearish/Neutral with confidence. Batch inference support. CPU/GPU auto-detection. |
+| `models/lstm_model.py` | **LSTM wrapper**: PyTorch LSTM for price direction prediction. Accepts OHLC + indicator features. Returns predicted direction, volatility, trend strength. Includes training and inference modes. |
+| `models/xgboost_model.py` | **XGBoost wrapper**: trained model combining all features (indicators, patterns, sentiment, LSTM prediction, volatility) into a single probability score. Includes training, inference, and feature engineering. |
+| `models/gpt2_reasoning.py` | **GPT-2B wrapper**: local transformer for generating trade explanations from structured signal data. Prompt template formats indicator + sentiment + probability context. |
+| `models/model_manager.py` | **Model lifecycle**: lazy loading, device selection (CPU/CUDA/MPS), model caching, memory management (unload between cycles if low RAM). |
+
 ### `agents/` — Intelligence Agents
 
 | File | Purpose |
 |------|---------|
 | `agents/__init__.py` | Package |
 | `agents/chart_agent.py` | Multi-timeframe orchestrator: runs indicators + patterns on 5m/15m/1h/4h, selects best timeframe by clarity score. |
-| `agents/sentiment_agent.py` | **LLM abstraction**: `SentimentProvider` ABC with `OpenAIProvider`, `ClaudeProvider`, `KeywordProvider` implementations. Classifies Bullish/Bearish/Neutral with confidence. Config selects provider. |
+| `agents/sentiment_agent.py` | **FinBERT integration**: wraps `models/finbert.py`. Classifies news headlines, returns per-headline and aggregate sentiment. No external API dependency. |
 | `agents/news_agent.py` | Wraps `news_data.py` + `sentiment_agent.py`. Checks news blackout (Fed, NFP, CPI) via keyword matching on collected headlines. Returns `{news_items, sentiments, macro_score, is_blackout}`. |
-| `agents/signal_agent.py` | **Signal Decision Agent**: implements scoring algorithm (see below). Combines technical + pattern + sentiment + volatility into probability via sigmoid. Threshold: 0.68. |
+| `agents/prediction_agent.py` | **LSTM integration**: wraps `models/lstm_model.py`. Prepares features from OHLC + indicators, returns predicted direction and confidence. |
+| `agents/signal_agent.py` | **XGBoost integration**: wraps `models/xgboost_model.py`. Assembles feature vector from all agents, gets probability from XGBoost, generates explanation via GPT-2B if threshold met. |
 | `agents/risk_agent.py` | **Risk Management Agent**: 1% risk/trade, 3% daily, 2 max positions, kill switch at 5% daily loss, SL/TP via ATR, news blackout gate. |
 
 ### `execution/` — Signal Delivery
@@ -156,7 +203,7 @@ All files under project root.
 |------|---------|
 | `backtesting/__init__.py` | Package |
 | `backtesting/backtester.py` | Loads CSV data via `csv_loader.py`. Replays bar-by-bar through the full pipeline. Records signals and simulated outcomes. Outputs metrics via vectorbt. |
-| `backtesting/strategy.py` | Wraps scoring algorithm into vectorbt-compatible strategy. Supports parameter sweeps for weight optimization. |
+| `backtesting/strategy.py` | Wraps XGBoost model into vectorbt-compatible strategy. Supports parameter sweeps and walk-forward optimization. |
 
 ### `tests/`
 
@@ -166,9 +213,12 @@ All files under project root.
 | `tests/conftest.py` | Shared fixtures: sample OHLC data, test config, in-memory SQLite, mock providers |
 | `tests/test_indicators.py` | Unit tests for all indicator computations against known values |
 | `tests/test_patterns.py` | Unit tests for pattern detection with synthetic candle data |
-| `tests/test_signal_scoring.py` | Unit tests for scoring algorithm with fixed inputs -> expected outputs |
+| `tests/test_finbert.py` | FinBERT sentiment classification tests with known financial text |
+| `tests/test_lstm.py` | LSTM prediction tests with synthetic time series |
+| `tests/test_xgboost.py` | XGBoost probability model tests with known feature vectors |
+| `tests/test_signal_scoring.py` | End-to-end signal agent tests: features in -> probability + reasoning out |
 | `tests/test_risk_agent.py` | All risk rules, kill switch, position limits, edge cases |
-| `tests/test_sentiment.py` | Sentiment classification with mocked LLM responses |
+| `tests/test_sentiment.py` | Sentiment agent tests with mocked FinBERT responses |
 | `tests/test_database.py` | DB operations and metric calculations |
 | `tests/test_integration.py` | End-to-end: synthetic market data through full pipeline to final signal |
 
@@ -181,60 +231,79 @@ All inter-agent communication uses these frozen dataclasses. No agent imports ty
 ```python
 OHLCBar: timestamp, open, high, low, close, volume
 IndicatorResult: rsi, macd_line, macd_signal, macd_hist, ema_20, ema_50, ema_200,
-                 bb_upper, bb_middle, bb_lower, atr, support, resistance, trend_direction
+                 bb_upper, bb_middle, bb_lower, atr, support, resistance, trend_direction,
+                 breakout_probability
 PatternResult: pattern_name, direction (+1/-1), confidence (0.0-1.0), description
 NewsItem: source, headline, url, published_at, raw_text
 SentimentResult: classification (Bullish/Bearish/Neutral), confidence, reasoning
-TechnicalScore: score (-1.0 to +1.0), components (dict of sub-scores)
+LSTMPrediction: predicted_direction (+1/-1/0), predicted_volatility, trend_strength, confidence
 TradeSignal: asset, direction (BUY/SELL/NO_TRADE), entry_price, stop_loss, take_profit,
              probability, reasoning, timestamp, timeframe
 RiskVerdict: approved (bool), position_size, rejection_reason, daily_risk_used, open_positions
 FinalSignal: signal (TradeSignal), risk (RiskVerdict), formatted_message
+AccountState: capital, open_positions, daily_pnl, kill_switch_active, updated_at
 ```
 
 ---
 
-## Signal Scoring Algorithm
+## Signal Scoring — XGBoost Model
 
-### Input Dimensions
+### Previous Approach (v1.x plan)
 
-**A. Technical Score (weight: 0.40)**
+The original plan used a hand-tuned weighted formula with sigmoid mapping.
+This is replaced by a trained XGBoost model per constitution v1.1.
 
-| Indicator | Bullish | Bearish | Sub-weight |
-|-----------|---------|---------|------------|
-| RSI(14) | < 30 -> +1.0; 30-45 -> +0.5 | > 70 -> -1.0; 55-70 -> -0.5 | 0.15 |
-| MACD | Histogram positive + rising -> +1.0; crossover -> +0.8 | Negative + falling -> -1.0 | 0.20 |
-| EMA alignment | Price > EMA20 > EMA50 > EMA200 -> +1.0 | Inverse -> -1.0 | 0.25 |
-| Bollinger Bands | Near lower band + squeeze -> +0.8 | Near upper + expansion -> -0.8 | 0.15 |
-| Support/Resistance | Bounce off support -> +0.7 | Rejected at resistance -> -0.7 | 0.15 |
-| Breakout | Breaking resistance with volume -> +1.0 | Breaking support -> -1.0 | 0.10 |
+### New Approach — XGBoost Probability Model
 
-```
-technical_score = sum(sub_score_i * sub_weight_i)  # range [-1.0, +1.0]
-```
+XGBoost receives a structured feature vector and outputs a probability.
 
-**B. Pattern Score (weight: 0.20)**
+#### Feature Vector (input to XGBoost)
 
-```
-pattern_score = mean(direction_i * confidence_i)  # across all detected patterns
-# 0.0 if no patterns detected (neutral, does not penalize)
-```
+| Feature Group | Features | Source |
+|--------------|----------|--------|
+| Technical Indicators | RSI, MACD line/signal/hist, EMA 20/50/200, BB upper/middle/lower, ATR | `analysis/indicators.py` |
+| Derived Technical | EMA alignment score, BB squeeze ratio, ATR volatility ratio, support/resistance distance | `analysis/indicators.py` |
+| Pattern Detection | Pattern direction, confidence (per pattern type) | `analysis/pattern_detection.py` |
+| Sentiment | FinBERT macro score, sentiment confidence, headline count | `agents/sentiment_agent.py` |
+| LSTM Prediction | Predicted direction, predicted volatility, trend strength, LSTM confidence | `agents/prediction_agent.py` |
+| Volatility | Current ATR / 20-period avg ATR, BB width | Computed from indicators |
 
-**C. Sentiment Score (weight: 0.25)**
+Total: ~25-35 features.
 
-Aggregate `macro_score` from sentiment agent, range [-1.0, +1.0].
-
-**D. Volatility Adjustment (weight: 0.15)**
+#### Training Pipeline
 
 ```
-vol_ratio = current_atr / avg_atr_20
-
-if vol_ratio > 1.5:   factor = 0.7   # high vol = dampen (less predictable)
-elif vol_ratio < 0.8:  factor = 1.1   # squeeze = boost (breakout potential)
-else:                   factor = 1.0   # normal
+Historical OHLC data (CSV)
+  → compute indicators + patterns
+  → compute LSTM predictions
+  → label: future price movement (up/down/flat over N candles)
+  → train XGBoost classifier
+  → save model to models/weights/xgboost_model.json
 ```
 
-### Combination Formula
+Training uses walk-forward cross-validation to prevent look-ahead bias.
+
+#### Inference
+
+```python
+features = assemble_feature_vector(indicators, patterns, sentiment, lstm_pred, volatility)
+probability = xgboost_model.predict_proba(features)  # P(BUY) or P(SELL)
+
+if probability >= 0.68:
+    direction = "BUY" if buy_prob > sell_prob else "SELL"
+    reasoning = gpt2_model.generate_explanation(features, direction, probability)
+    signal = TradeSignal(direction=direction, probability=probability, reasoning=reasoning, ...)
+else:
+    direction = "NO_TRADE"
+```
+
+#### Fallback
+
+If XGBoost model is not yet trained (early development), fall back to the
+weighted formula from the original plan. This ensures Phase 1 can operate
+without trained models.
+
+### Weighted Formula Fallback
 
 ```python
 raw_score = (0.40 * technical_score +
@@ -243,36 +312,99 @@ raw_score = (0.40 * technical_score +
              0.15 * trend_strength)
 
 adjusted = raw_score * volatility_factor
-
-# Sigmoid maps [-1, +1] to [0, 1] probability space
 probability = 1.0 / (1.0 + math.exp(-4.0 * adjusted))
-
-if adjusted > 0:
-    direction = "BUY"
-elif adjusted < 0:
-    direction = "SELL"
-    probability = 1.0 - probability  # flip for sell confidence
-else:
-    direction = "NO_TRADE"
 
 # ONLY generate signal if probability >= 0.68
 ```
 
-Sigmoid with steepness 4.0 maps:
-- adjusted +0.50 -> probability ~0.88
-- adjusted +0.30 -> probability ~0.77
-- adjusted +0.15 -> probability ~0.65 (below threshold, NO_TRADE)
-- adjusted  0.00 -> probability  0.50 (NO_TRADE)
+This fallback is used during Phase 1 and Phase 2 before XGBoost is trained.
 
-### Multi-Timeframe Selection
+---
+
+## LSTM Time Series Model
+
+### Architecture
+
+```
+Input: [OHLC + indicators] × N candles (lookback window)
+  → Feature normalization (StandardScaler)
+  → LSTM layers (2 layers, 64 hidden units)
+  → Fully connected output
+  → Predicted direction (+1 BUY / -1 SELL / 0 FLAT)
+  → Predicted volatility (normalized ATR)
+  → Trend strength (0.0-1.0)
+```
+
+### Training
+
+```
+Historical data → sliding window sequences → train/val split (80/20, time-ordered)
+Loss: CrossEntropyLoss for direction + MSELoss for volatility
+Optimizer: Adam, lr=0.001
+Epochs: 50-100 with early stopping
+```
+
+Model weights saved to `models/weights/lstm_model.pt`.
+
+### Prediction Horizon
+
+5–30 candles ahead (configurable per timeframe).
+
+---
+
+## FinBERT Sentiment Model
+
+### Usage
 
 ```python
-# For each timeframe (5m, 15m, 1h, 4h):
-clarity = abs(technical_score) * trend_strength * (1.0 / vol_ratio)
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-# Select timeframe with highest clarity score
-# This favors: strong trend + decisive signal + moderate volatility
+model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
+tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
+
+# Input: financial headline text
+# Output: {positive, negative, neutral} probabilities
+# Mapped to: Bullish (positive), Bearish (negative), Neutral
 ```
+
+### Aggregation
+
+```python
+macro_score = mean(
+    sentiment_direction * confidence
+    for headline in recent_headlines
+)
+# sentiment_direction: +1 (Bullish), -1 (Bearish), 0 (Neutral)
+# macro_score range: [-1.0, +1.0]
+```
+
+---
+
+## GPT-2B Reasoning Model
+
+### Purpose
+
+Generate human-readable trade explanations. NOT used for prediction.
+
+### Prompt Template
+
+```
+Given the following market analysis for {asset}:
+- Technical: RSI={rsi}, MACD={macd_status}, Trend={trend}
+- Sentiment: {sentiment} (confidence: {confidence})
+- ML Prediction: {direction} with {probability}% confidence
+
+Explain why this is a {direction} signal in 2-3 sentences.
+```
+
+### Model Options (local, ranked by size)
+
+1. `gpt2` (124M) — fastest, minimal RAM
+2. `gpt2-medium` (355M) — better quality
+3. `gpt2-large` (774M) — good quality, ~3 GB RAM
+4. `microsoft/phi-2` (2.7B) — best quality, ~6 GB RAM
+
+Default: `gpt2-medium` (balance of quality and resource usage).
 
 ---
 
@@ -328,6 +460,7 @@ CREATE TABLE signals (
     technical_score REAL,
     pattern_score REAL,
     sentiment_score REAL,
+    lstm_prediction REAL,
     volatility_factor REAL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status TEXT DEFAULT 'pending'
@@ -403,6 +536,11 @@ CREATE TABLE account_state (
 core/types.py              <-- imported by everything, imports nothing from project
 core/config.py             <-- imported by everything, imports nothing from project
 core/logger.py             <-- imported by everything, imports nothing from project
+models/model_manager.py    <-- config, logger
+models/finbert.py          <-- model_manager, types
+models/lstm_model.py       <-- model_manager, types
+models/xgboost_model.py    <-- model_manager, types
+models/gpt2_reasoning.py   <-- model_manager, types
 storage/database.py        <-- types, config
 data/market_data.py        <-- types, config, logger
 data/news_data.py          <-- types, config, logger
@@ -410,9 +548,10 @@ data/csv_loader.py         <-- types
 analysis/indicators.py     <-- types
 analysis/pattern_detection.py <-- types
 agents/chart_agent.py      <-- market_data, indicators, pattern_detection, types
-agents/sentiment_agent.py  <-- types, config
+agents/sentiment_agent.py  <-- finbert, types
+agents/prediction_agent.py <-- lstm_model, types
 agents/news_agent.py       <-- news_data, sentiment_agent, types
-agents/signal_agent.py     <-- types, config
+agents/signal_agent.py     <-- xgboost_model, gpt2_reasoning, types, config
 agents/risk_agent.py       <-- types, config, database
 execution/signal_generator.py <-- types
 execution/telegram_bot.py  <-- types, config, database
@@ -420,7 +559,7 @@ core/scheduler.py          <-- ALL agents, database (orchestrator)
 main.py                    <-- config, scheduler, telegram_bot, database, logger
 ```
 
-Direction: `main -> scheduler -> agents -> data/analysis -> core/types`. No cycles.
+Direction: `main -> scheduler -> agents -> models/data/analysis -> core/types`. No cycles.
 
 ---
 
@@ -434,8 +573,6 @@ class AppConfig:
     # API Keys (all optional — system degrades gracefully)
     market_data_provider: str    # "twelvedata" | "alphavantage" | "polygon"
     market_data_api_key: str
-    sentiment_provider: str      # "openai" | "claude" | "keyword"
-    sentiment_api_key: str
     telegram_bot_token: str
     telegram_chat_id: str
 
@@ -452,12 +589,6 @@ class AppConfig:
     # Signal threshold
     signal_threshold: float = 0.68
 
-    # Scoring weights
-    weight_technical: float = 0.40
-    weight_pattern: float = 0.20
-    weight_sentiment: float = 0.25
-    weight_volatility: float = 0.15
-
     # Risk parameters
     initial_capital: float       # from .env, no default
     max_risk_per_trade: float = 0.01
@@ -467,6 +598,13 @@ class AppConfig:
     sl_atr_multiplier: float = 1.5
     tp_atr_multiplier: float = 3.0
     min_risk_reward: float = 1.8
+
+    # ML Model paths
+    finbert_model: str = "ProsusAI/finbert"
+    lstm_model_path: str = "models/weights/lstm_model.pt"
+    xgboost_model_path: str = "models/weights/xgboost_model.json"
+    gpt2_model: str = "gpt2-medium"
+    model_device: str = "auto"   # "auto" | "cpu" | "cuda" | "mps"
 
     # Infrastructure
     db_path: str = "storage/trading.db"
@@ -479,7 +617,7 @@ class AppConfig:
 
 ## Development Phases
 
-### Phase 1 — Core System + Risk (REVISED)
+### Phase 1 — Core System + Risk ✅ COMPLETED
 
 **Goal**: Market data -> indicators -> signal summary -> risk check -> Telegram
 
@@ -503,41 +641,60 @@ Tests: `tests/conftest.py`, `tests/test_indicators.py`, `tests/test_risk_agent.p
 
 **Phase 1 delivers**: A running system that fetches XAU/USD data, computes indicators, applies risk rules to any manual signal, and sends summaries to Telegram.
 
-### Phase 2 — Sentiment Intelligence
+### Phase 2 — Sentiment Intelligence (FinBERT)
 
-**Goal**: RSS news collection + sentiment scoring
+**Goal**: RSS news collection + FinBERT local sentiment scoring + news blackout
 
-1. `data/news_data.py` — RSS feed collector via feedparser
-2. `agents/sentiment_agent.py` — provider abstraction (OpenAI/Claude/keyword), keyword fallback as default
-3. `agents/news_agent.py` — orchestration + news blackout detection
-4. Update `storage/database.py` — news table operations (schema already exists from Phase 1)
+**Constitution alignment**: FinBERT replaces the generic LLM abstraction. Runs locally, no external API needed for inference.
 
-Tests: `tests/test_sentiment.py`
+1. `models/__init__.py`, `models/model_manager.py` — model lifecycle (device detection, lazy loading, memory management)
+2. `models/finbert.py` — load `ProsusAI/finbert` via transformers, batch inference, CPU/GPU auto-detect
+3. `data/news_data.py` — RSS feed collector via feedparser, keyword filtering, dedup
+4. `agents/sentiment_agent.py` — wraps FinBERT model, per-headline and aggregate scoring
+5. `agents/news_agent.py` — orchestration: collect news → classify sentiment → detect blackout → return macro score
+6. Update `storage/database.py` — news table operations (schema already exists from Phase 1)
+7. `setup_models.py` — download FinBERT weights on first run
 
-**Phase 2 delivers**: News sentiment flowing into the pipeline, blackout detection active.
+Tests: `tests/test_finbert.py`, `tests/test_sentiment.py`
 
-### Phase 3 — AI Decision Engine
+New dependencies: `torch`, `transformers`
 
-**Goal**: Full probability-based signal generation with scoring algorithm
+**Phase 2 delivers**: Local FinBERT sentiment analysis on financial news, blackout detection active. No external API costs for sentiment.
 
-1. `analysis/pattern_detection.py` — 6 rule-based pattern detectors
-2. `agents/chart_agent.py` — multi-timeframe analysis + timeframe selection
-3. `agents/signal_agent.py` — scoring algorithm + sigmoid probability + 0.68 threshold
-4. Update `core/scheduler.py` — full pipeline: chart_agent -> news_agent -> signal_agent -> risk_agent -> delivery
+### Phase 3 — AI Decision Engine (LSTM + XGBoost + GPT-2B)
 
-Tests: `tests/test_patterns.py`, `tests/test_signal_scoring.py`
+**Goal**: Full probability-based signal generation with ML models
 
-**Phase 3 delivers**: Complete autonomous signal generation. The system now produces probability-scored BUY/SELL/NO_TRADE decisions with reasoning, risk-checked before delivery.
+**Constitution alignment**: XGBoost combines all features into probability. LSTM provides time series prediction. GPT-2B generates explanations.
+
+1. `analysis/pattern_detection.py` — 6 rule-based pattern detectors (breakout, triangle, double top/bottom, head & shoulders, range)
+2. `agents/chart_agent.py` — multi-timeframe analysis + timeframe selection by clarity score
+3. `models/lstm_model.py` — LSTM architecture, training loop, inference, feature preparation
+4. `agents/prediction_agent.py` — wraps LSTM, prepares OHLC + indicator features, returns prediction
+5. `models/xgboost_model.py` — feature engineering, training pipeline (walk-forward CV), inference
+6. `models/gpt2_reasoning.py` — load GPT-2 variant, prompt template, generate explanation text
+7. `agents/signal_agent.py` — assemble feature vector → XGBoost probability → GPT-2B reasoning if threshold met
+8. Update `core/scheduler.py` — full pipeline: chart_agent → news_agent → prediction_agent → signal_agent → risk_agent → delivery
+9. Training scripts for LSTM and XGBoost using historical CSV data
+
+Tests: `tests/test_patterns.py`, `tests/test_lstm.py`, `tests/test_xgboost.py`, `tests/test_signal_scoring.py`
+
+New dependencies: `scikit-learn`, `xgboost`
+
+**Phase 3 delivers**: Complete autonomous signal generation. XGBoost probability scoring, LSTM predictions, GPT-2B explanations. Falls back to weighted formula if models not yet trained.
 
 ### Phase 4 — Backtesting Engine
 
 **Goal**: Historical validation + strategy optimization
 
 1. `data/csv_loader.py` — CSV parser for MT4/TradingView/generic formats
-2. `backtesting/__init__.py`, `backtesting/strategy.py` — vectorbt-compatible strategy wrapper
+2. `backtesting/__init__.py`, `backtesting/strategy.py` — vectorbt-compatible strategy wrapper using XGBoost model
 3. `backtesting/backtester.py` — bar-by-bar replay through full pipeline, metrics output
+4. Walk-forward optimization for XGBoost hyperparameters
 
-**Phase 4 delivers**: Ability to evaluate signal quality on 1 year of historical data. Results inform weight tuning.
+New dependencies: `vectorbt`
+
+**Phase 4 delivers**: Ability to evaluate signal quality on 1+ years of historical data. Results inform model retraining.
 
 ### Phase 5 — Polish + Telegram Commands
 
@@ -557,6 +714,7 @@ Tests: `tests/test_patterns.py`, `tests/test_signal_scoring.py`
 2. Update `core/scheduler.py` — `concurrent.futures.ThreadPoolExecutor` per asset
 3. Update all agents — accept `asset` parameter, no hardcoded XAU/USD
 4. Update `storage/database.py` — all queries filtered by asset
+5. Per-asset model instances (XGBoost trained per asset)
 
 **Phase 6 delivers**: System monitoring up to 10 assets with independent signal generation and risk tracking per asset.
 
@@ -568,12 +726,12 @@ Instead of a single 5-minute loop, the scheduler runs independent jobs:
 
 | Timeframe | Interval | What runs |
 |-----------|----------|-----------|
-| 5min | Every 5 minutes | Full pipeline: data -> indicators -> patterns -> signal -> risk -> delivery |
+| 5min | Every 5 minutes | Full pipeline: data → indicators → patterns → LSTM → sentiment → XGBoost → risk → delivery |
 | 15min | Every 15 minutes | Same pipeline, 15min candles |
 | 1h | Every 60 minutes | Same pipeline, 1h candles |
 | 4h | Every 240 minutes | Same pipeline, 4h candles |
 
-The Signal Decision Agent receives results from all recently-run timeframes and uses the **clarity score** to weight them. A signal is only generated when the best timeframe crosses the 0.68 probability threshold.
+The Signal Decision Agent receives results from all recently-run timeframes and uses the best timeframe to generate a signal. A signal is only generated when the XGBoost probability crosses the 0.68 threshold.
 
 ---
 
@@ -584,6 +742,8 @@ The Signal Decision Agent receives results from all recently-run timeframes and 
 | Language | Python 3.11 |
 | Data | pandas, numpy |
 | Indicators | ta (technical analysis library) |
+| ML - Gradient Boosting | scikit-learn, xgboost |
+| ML - Deep Learning | torch, transformers (FinBERT, LSTM, GPT-2B) |
 | HTTP | requests |
 | RSS | feedparser |
 | Scheduling | APScheduler |
@@ -592,7 +752,6 @@ The Signal Decision Agent receives results from all recently-run timeframes and 
 | Storage | SQLite (stdlib sqlite3) |
 | Config | python-dotenv |
 | Testing | pytest, pytest-asyncio |
-| LLM (optional) | openai / anthropic SDK |
 
 ---
 
@@ -600,6 +759,7 @@ The Signal Decision Agent receives results from all recently-run timeframes and 
 
 ```
 1. Market Data Agent fetches XAU/USD 1h candles from TwelveData
+
 2. Chart Analysis Agent computes indicators:
    - Trend: bullish (EMA aligned)
    - RSI: 63 (neutral-bullish)
@@ -608,18 +768,27 @@ The Signal Decision Agent receives results from all recently-run timeframes and 
 
 3. Pattern Detection Agent finds: breakout above 2350 (confidence: 0.70)
 
-4. News Agent collects RSS headlines, Sentiment Agent classifies:
-   - "FED signals rate cuts" -> Bullish, confidence 0.78
-   - macro_score: +0.55
+4. LSTM Prediction Agent predicts:
+   - Direction: +1 (BUY), confidence: 0.72
+   - Volatility: moderate
+   - Trend strength: 0.80
 
-5. Signal Decision Agent scores:
-   - technical: 0.65, pattern: 0.70, sentiment: 0.55, trend: 0.80
-   - raw = 0.40*0.65 + 0.20*0.70 + 0.25*0.55 + 0.15*0.80 = 0.657
-   - volatility factor: 1.0 (normal ATR)
-   - probability = sigmoid(4.0 * 0.657) = 0.93
-   - Direction: BUY, Probability: 93%
+5. News Agent collects RSS headlines, FinBERT classifies:
+   - "FED signals rate cuts" -> Bullish, confidence 0.82
+   - "Gold demand rises in Asia" -> Bullish, confidence 0.75
+   - macro_score: +0.60
 
-6. Risk Management Agent checks:
+6. Signal Decision Agent (XGBoost) scores:
+   - Feature vector assembled: [RSI=63, MACD=+, EMA_aligned=1, ...]
+   - XGBoost probability: 0.89 (BUY)
+   - Exceeds threshold (0.68) -> generate signal
+
+7. GPT-2B generates explanation:
+   "Gold shows bullish momentum with MACD crossover and aligned EMAs.
+    FinBERT detects positive macro sentiment from Fed rate cut signals.
+    LSTM confirms upward trend. Breakout above 2350 resistance adds confidence."
+
+8. Risk Management Agent checks:
    - Daily risk used: 0% (first trade) -> OK
    - Open positions: 0 -> OK
    - Kill switch: inactive -> OK
@@ -629,19 +798,43 @@ The Signal Decision Agent receives results from all recently-run timeframes and 
    - Position size = (0.01 * capital) / 15 = ...
    - APPROVED
 
-7. Signal Generator formats message:
+9. Signal Generator formats message:
 
-   GOLD SIGNAL
+   🟢 GOLD SIGNAL
    Asset: XAU/USD
    Direction: BUY
    Entry: 2335
    Stop Loss: 2320
    Take Profit: 2365
-   Confidence: 93%
-   Reason: Bullish breakout + positive macro sentiment
+   Confidence: 89%
+   Reason: Bullish breakout + positive macro sentiment + LSTM confirmation
 
-8. Telegram Bot sends to channel
-9. Performance Tracker logs signal to SQLite
+10. Telegram Bot sends to channel
+11. Performance Tracker logs signal to SQLite
+```
+
+---
+
+## Model Setup Procedure
+
+First-time setup (run once after install):
+
+```bash
+python setup_models.py
+```
+
+This script:
+1. Downloads FinBERT weights from HuggingFace (`ProsusAI/finbert`)
+2. Downloads GPT-2 variant weights (default: `gpt2-medium`)
+3. Creates empty LSTM and XGBoost model directories
+4. Verifies torch installation (CPU or CUDA)
+
+LSTM and XGBoost models require training on historical data:
+
+```bash
+# After loading historical CSV data:
+python -m models.lstm_model --train --data data/historical/xauusd_1h.csv
+python -m models.xgboost_model --train --data data/historical/xauusd_1h.csv
 ```
 
 ---
@@ -654,6 +847,7 @@ The Signal Decision Agent receives results from all recently-run timeframes and 
 - Cloud deployment (Docker + scheduling service)
 - CNN-based pattern detection on chart images
 - Economic calendar API for smarter news blackout
+- Model retraining automation on new data
 
 ---
 
@@ -662,8 +856,8 @@ The Signal Decision Agent receives results from all recently-run timeframes and 
 | Phase | How to verify |
 |-------|--------------|
 | Phase 1 | `python main.py` -> Telegram receives indicator summaries; risk agent rejects signals missing SL/TP |
-| Phase 2 | RSS feeds collected, sentiment scores appear in news table |
-| Phase 3 | Signals include probability; NO_TRADE when below 0.68; full reasoning |
+| Phase 2 | RSS feeds collected, FinBERT sentiment scores appear in news table; news blackout triggers |
+| Phase 3 | Signals include XGBoost probability; GPT-2B reasoning in messages; NO_TRADE when below 0.68 |
 | Phase 4 | `python -m backtesting.backtester --csv data/historical/xauusd_1h.csv` -> metrics output |
 | Phase 5 | `/performance` Telegram command returns formatted metrics |
 | Phase 6 | Configure 3 assets, verify independent signals per asset |
