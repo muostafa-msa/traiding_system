@@ -3,7 +3,19 @@ from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 
 from storage.database import Database
-from core.types import TradeSignal
+from core.types import TradeSignal, NewsItem
+
+
+def _make_news_item(
+    headline: str = "Gold prices surge", source: str = "test"
+) -> NewsItem:
+    return NewsItem(
+        source=source,
+        headline=headline,
+        url="https://example.com/article",
+        published_at=datetime.now(timezone.utc),
+        raw_text="",
+    )
 
 
 class TestSaveAndGetSignal:
@@ -200,3 +212,102 @@ class TestDailyPerformance:
         assert perf1["net_pnl"] == 100.0
         assert perf2["total_signals"] == 7
         assert perf2["net_pnl"] == -50.0
+
+
+class TestSaveAndGetNews:
+    def test_save_news_inserts_record(self, db: Database):
+        item = _make_news_item("Gold prices surge")
+        content_hash = "abc123"
+        db.save_news(item, "Bullish", 0.95, content_hash)
+        rows = db.get_recent_news(4)
+        assert len(rows) == 1
+        assert rows[0]["headline"] == "Gold prices surge"
+        assert rows[0]["classification"] == "Bullish"
+        assert rows[0]["confidence"] == 0.95
+
+    def test_save_news_duplicate_hash_ignored(self, db: Database):
+        item = _make_news_item("Gold prices surge")
+        content_hash = "same_hash"
+        db.save_news(item, "Bullish", 0.95, content_hash)
+        db.save_news(item, "Bearish", 0.80, content_hash)
+        rows = db.get_recent_news(4)
+        assert len(rows) == 1
+        assert rows[0]["classification"] == "Bullish"
+
+    def test_get_recent_news_respects_window(self, db: Database):
+        now = datetime.now(timezone.utc)
+        old_item = NewsItem(
+            source="test",
+            headline="Old news",
+            url="",
+            published_at=now - timedelta(hours=5),
+            raw_text="",
+        )
+        new_item = NewsItem(
+            source="test",
+            headline="New news",
+            url="",
+            published_at=now - timedelta(hours=1),
+            raw_text="",
+        )
+        db.save_news(old_item, "Neutral", 0.6, "hash_old")
+        old_collected = (now - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M:%S")
+        db._conn.execute(
+            "UPDATE news SET collected_at = ? WHERE content_hash = ?",
+            (old_collected, "hash_old"),
+        )
+        db._conn.commit()
+        db.save_news(new_item, "Bullish", 0.9, "hash_new")
+        rows = db.get_recent_news(4)
+        assert len(rows) == 1
+        assert rows[0]["headline"] == "New news"
+
+    def test_get_recent_news_returns_empty_when_none(self, db: Database):
+        rows = db.get_recent_news(4)
+        assert rows == []
+
+
+class TestCheckHashExists:
+    def test_check_hash_exists_returns_false_for_unknown(self, db: Database):
+        assert db.check_hash_exists("nonexistent") is False
+
+    def test_check_hash_exists_returns_true_after_save(self, db: Database):
+        item = _make_news_item("Gold prices surge")
+        db.save_news(item, "Bullish", 0.95, "known_hash")
+        assert db.check_hash_exists("known_hash") is True
+
+    def test_check_hash_exists_is_case_sensitive(self, db: Database):
+        item = _make_news_item("Gold prices surge")
+        db.save_news(item, "Bullish", 0.95, "Hash_ABC")
+        assert db.check_hash_exists("Hash_ABC") is True
+        assert db.check_hash_exists("hash_abc") is False
+
+
+class TestBlackout:
+    def test_initial_blackout_not_active(self, db: Database):
+        assert db.is_blackout_active() is False
+
+    def test_set_blackout_until_activates(self, db: Database):
+        future = datetime.now(timezone.utc) + timedelta(hours=4)
+        db.set_blackout_until(future)
+        assert db.is_blackout_active() is True
+
+    def test_blackout_expired_is_not_active(self, db: Database):
+        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        db.set_blackout_until(past)
+        assert db.is_blackout_active() is False
+
+    def test_clear_expired_blackout_clears_past(self, db: Database):
+        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        db.set_blackout_until(past)
+        db.clear_expired_blackout()
+        row = db._conn.execute(
+            "SELECT blackout_until FROM account_state ORDER BY id LIMIT 1"
+        ).fetchone()
+        assert row["blackout_until"] is None
+
+    def test_clear_expired_blackout_keeps_active(self, db: Database):
+        future = datetime.now(timezone.utc) + timedelta(hours=4)
+        db.set_blackout_until(future)
+        db.clear_expired_blackout()
+        assert db.is_blackout_active() is True

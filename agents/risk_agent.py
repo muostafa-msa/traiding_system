@@ -79,6 +79,16 @@ class RiskAgent:
                 open_positions=current_open,
             )
 
+        if self._db.is_blackout_active():
+            logger.info("Signal rejected: news blackout period active")
+            return RiskVerdict(
+                approved=False,
+                position_size=0.0,
+                rejection_reason="News blackout period",
+                daily_risk_used=daily_risk_used,
+                open_positions=current_open,
+            )
+
         rr = self._calculate_risk_reward(signal)
         if rr < 1.8:
             logger.info("Signal rejected: risk-reward ratio %.2f < 1.8", rr)

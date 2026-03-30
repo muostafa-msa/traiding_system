@@ -9,6 +9,7 @@ from core.config import AppConfig
 from core.types import TradeSignal
 from execution.telegram_bot import TelegramBot
 from storage.database import Database
+from tests.conftest import _default_sentiment_fields
 
 
 @pytest.fixture
@@ -28,6 +29,7 @@ def bot_config() -> AppConfig:
         tp_atr_multiplier=3.0,
         log_level="INFO",
         db_path=":memory:",
+        **_default_sentiment_fields(),
     )
 
 
@@ -48,6 +50,7 @@ def noop_config() -> AppConfig:
         tp_atr_multiplier=3.0,
         log_level="INFO",
         db_path=":memory:",
+        **_default_sentiment_fields(),
     )
 
 
@@ -123,9 +126,14 @@ class TestStatusCommand:
     @pytest.mark.asyncio
     async def test_status_shows_live_open_positions(self, bot: TelegramBot):
         signal = TradeSignal(
-            asset="XAU/USD", direction="BUY", entry_price=2350.0,
-            stop_loss=2335.0, take_profit=2380.0, probability=0.85,
-            reasoning="Test", timeframe="1h",
+            asset="XAU/USD",
+            direction="BUY",
+            entry_price=2350.0,
+            stop_loss=2335.0,
+            take_profit=2380.0,
+            probability=0.85,
+            reasoning="Test",
+            timeframe="1h",
             timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
         )
         sid = bot._db.save_signal(signal, "approved")

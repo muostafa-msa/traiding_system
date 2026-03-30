@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -119,3 +119,46 @@ class FinalSignal:
     signal: TradeSignal
     risk: RiskVerdict
     formatted_message: str
+
+
+@dataclass(frozen=True)
+class NewsItem:
+    source: str
+    headline: str
+    url: str
+    published_at: datetime
+    raw_text: str = ""
+
+    def __post_init__(self):
+        if not self.headline.strip():
+            raise ValueError("headline must be non-empty")
+        if not self.source.strip():
+            raise ValueError("source must be non-empty")
+
+
+@dataclass(frozen=True)
+class SentimentResult:
+    classification: str
+    confidence: float
+    positive_score: float
+    negative_score: float
+    neutral_score: float
+
+    def __post_init__(self):
+        if self.classification not in ("Bullish", "Bearish", "Neutral"):
+            raise ValueError(
+                f"classification must be Bullish/Bearish/Neutral, got {self.classification}"
+            )
+        for name in ("confidence", "positive_score", "negative_score", "neutral_score"):
+            val = getattr(self, name)
+            if not (0.0 <= val <= 1.0):
+                raise ValueError(f"{name} must be in [0.0, 1.0], got {val}")
+
+
+@dataclass
+class MacroSentiment:
+    macro_score: float = 0.0
+    headline_count: int = 0
+    sentiments: list[SentimentResult] = field(default_factory=list)
+    is_blackout: bool = False
+    blackout_activated_at: datetime | None = None

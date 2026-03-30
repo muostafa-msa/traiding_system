@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from analysis.indicators import compute_indicators
+from agents.news_agent import NewsAgent
 from agents.risk_agent import RiskAgent
 from core.config import AppConfig
 from core.logger import get_logger
@@ -14,6 +15,7 @@ from core.types import OHLCBar, TradeSignal
 from data.market_data import MarketDataError, get_provider
 from execution.signal_generator import format_indicator_summary, format_trade_signal
 from execution.telegram_bot import TelegramBot
+from models.model_manager import ModelManager
 from storage.database import Database
 
 logger = get_logger(__name__)
@@ -39,6 +41,10 @@ class TradingScheduler:
         self._risk_agent = RiskAgent(config, database)
         self._scheduler = BackgroundScheduler()
         self._historical_data: dict[str, list] = {}
+        self._news_agent: NewsAgent | None = None
+        if config.rss_feed_urls.strip():
+            model_manager = ModelManager(config)
+            self._news_agent = NewsAgent(config, database, model_manager)
 
     def startup_fetch(self) -> None:
         logger.info("Starting historical data fetch for %s", ASSET)
@@ -142,6 +148,8 @@ class TradingScheduler:
 
             self._bot.broadcast(message)
 
+            self._run_news_agent()
+
             self._evaluate_signal_if_present(timeframe, indicators)
 
             self._bot.last_cycle_time = datetime.now(timezone.utc)
@@ -157,6 +165,20 @@ class TradingScheduler:
 
     def _evaluate_signal_if_present(self, timeframe: str, indicators) -> None:
         pass
+
+    def _run_news_agent(self) -> None:
+        if self._news_agent is None:
+            return
+        try:
+            result = self._news_agent.run()
+            logger.info(
+                "News sentiment: score=%.3f headlines=%d blackout=%s",
+                result.macro_score,
+                result.headline_count,
+                result.is_blackout,
+            )
+        except Exception as e:
+            logger.warning("News agent failed: %s", e)
 
     def process_signal(self, signal: TradeSignal) -> None:
         signal_id = self._db.save_signal(signal, "pending")

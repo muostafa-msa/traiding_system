@@ -8,6 +8,7 @@ from agents.risk_agent import RiskAgent
 from core.config import AppConfig
 from core.types import TradeSignal
 from storage.database import Database
+from tests.conftest import _default_sentiment_fields
 
 
 @pytest.fixture
@@ -27,6 +28,7 @@ def risk_config() -> AppConfig:
         tp_atr_multiplier=3.0,
         log_level="INFO",
         db_path=":memory:",
+        **_default_sentiment_fields(),
     )
 
 
@@ -184,3 +186,51 @@ class TestDailyReset:
         risk_agent._db.reset_daily_if_needed()
         verdict = risk_agent.evaluate(buy_signal)
         assert verdict.approved is True
+
+
+class TestBlackoutRejection:
+    def test_active_blackout_rejects_signal(
+        self, risk_agent: RiskAgent, buy_signal: TradeSignal
+    ):
+        from datetime import timedelta
+
+        future = datetime.now(timezone.utc) + timedelta(hours=4)
+        risk_agent._db.set_blackout_until(future)
+        verdict = risk_agent.evaluate(buy_signal)
+        assert verdict.approved is False
+        assert "News blackout period" in verdict.rejection_reason
+
+    def test_no_blackout_allows_signal(
+        self, risk_agent: RiskAgent, buy_signal: TradeSignal
+    ):
+        verdict = risk_agent.evaluate(buy_signal)
+        assert verdict.approved is True
+
+    def test_blackout_check_between_positions_and_rr(
+        self, risk_agent: RiskAgent, risk_config: AppConfig, buy_signal: TradeSignal
+    ):
+        from datetime import timedelta
+
+        signal_id = risk_agent._db.save_signal(buy_signal, "approved")
+        risk_agent._db.open_trade(signal_id, 0.1, 2350.0)
+
+        future = datetime.now(timezone.utc) + timedelta(hours=4)
+        risk_agent._db.set_blackout_until(future)
+
+        bad_rr_signal = TradeSignal(
+            asset="XAU/USD",
+            direction="BUY",
+            entry_price=2350.0,
+            stop_loss=2345.0,
+            take_profit=2352.0,
+            probability=0.7,
+            reasoning="Bad RR",
+            timeframe="1h",
+            timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+        )
+        verdict = risk_agent.evaluate(bad_rr_signal)
+        assert verdict.approved is False
+        assert (
+            "position" in verdict.rejection_reason.lower()
+            or "News blackout" in verdict.rejection_reason
+        )
