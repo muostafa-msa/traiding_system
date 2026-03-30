@@ -661,11 +661,11 @@ New dependencies: `torch`, `transformers`
 
 **Phase 2 delivers**: Local FinBERT sentiment analysis on financial news, blackout detection active. No external API costs for sentiment.
 
-### Phase 3 — AI Decision Engine (LSTM + XGBoost + GPT-2B)
+### Phase 3 — AI Decision Engine (LSTM + XGBoost + GPT-20B)
 
 **Goal**: Full probability-based signal generation with ML models
 
-**Constitution alignment**: XGBoost combines all features into probability. LSTM provides time series prediction. GPT-2B generates explanations.
+**Constitution alignment**: XGBoost combines all features into probability. LSTM provides time series prediction. GPT-20B generates explanations.
 
 1. `analysis/pattern_detection.py` — 6 rule-based pattern detectors (breakout, triangle, double top/bottom, head & shoulders, range)
 2. `agents/chart_agent.py` — multi-timeframe analysis + timeframe selection by clarity score

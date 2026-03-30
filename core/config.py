@@ -22,6 +22,13 @@ class AppConfig:
     tp_atr_multiplier: float
     log_level: str
     db_path: str
+    rss_feed_urls: str
+    rss_keywords: str
+    blackout_keywords: str
+    blackout_duration_hours: float
+    sentiment_window_hours: float
+    finbert_model_path: str
+    model_device: str
 
     def __post_init__(self):
         if not self.market_data_provider:
@@ -48,4 +55,16 @@ def load_config(env_path: str | None = None) -> AppConfig:
         tp_atr_multiplier=float(os.environ.get("TP_ATR_MULTIPLIER", "3.0")),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         db_path=os.environ.get("DB_PATH", "storage/trading.db"),
+        rss_feed_urls=os.environ.get("RSS_FEED_URLS", ""),
+        rss_keywords=os.environ.get(
+            "RSS_KEYWORDS", "gold,inflation,fed,interest rate,usd,war,oil,cpi,nfp"
+        ),
+        blackout_keywords=os.environ.get(
+            "BLACKOUT_KEYWORDS",
+            "fed,fomc,nfp,non-farm,cpi,consumer price,interest rate decision",
+        ),
+        blackout_duration_hours=float(os.environ.get("BLACKOUT_DURATION_HOURS", "4.0")),
+        sentiment_window_hours=float(os.environ.get("SENTIMENT_WINDOW_HOURS", "4.0")),
+        finbert_model_path=os.environ.get("FINBERT_MODEL_PATH", "models/finbert"),
+        model_device=os.environ.get("MODEL_DEVICE", "auto"),
     )

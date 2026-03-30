@@ -60,3 +60,8 @@ coverage.xml
 # Backtesting output
 backtesting/output/
 backtesting/results/
+
+# ML models (downloaded weights)
+models/finbert/
+models/**/*.bin
+models/**/*.safetensors

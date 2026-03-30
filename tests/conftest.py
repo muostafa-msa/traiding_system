@@ -9,6 +9,18 @@ from core.types import OHLCBar, TradeSignal
 from storage.database import Database
 
 
+def _default_sentiment_fields():
+    return dict(
+        rss_feed_urls="",
+        rss_keywords="gold,inflation,fed",
+        blackout_keywords="fed,fomc,nfp",
+        blackout_duration_hours=4.0,
+        sentiment_window_hours=4.0,
+        finbert_model_path="models/finbert",
+        model_device="auto",
+    )
+
+
 @pytest.fixture
 def test_config() -> AppConfig:
     return AppConfig(
@@ -26,6 +38,7 @@ def test_config() -> AppConfig:
         tp_atr_multiplier=3.0,
         log_level="INFO",
         db_path=":memory:",
+        **_default_sentiment_fields(),
     )
 
 

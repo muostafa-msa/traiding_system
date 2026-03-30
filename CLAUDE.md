@@ -1,8 +1,10 @@
 # traiding_system Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-03-28
+Auto-generated from all feature plans. Last updated: 2026-03-29
 
 ## Active Technologies
+- Python 3.12 + torch (>=2.0), transformers (>=4.30), feedparser (6.0.11, already installed) (002-finbert-sentiment)
+- SQLite (existing — add `content_hash` column to news table, `blackout_until` to account_state) (002-finbert-sentiment)
 
 - Python 3.11 + pandas, numpy, ta, requests, python-dotenv, apscheduler, python-telegram-bot, feedparser (Phase 1: core-system-risk)
 - torch, transformers (Phase 2: FinBERT sentiment)
@@ -51,6 +53,7 @@ Python 3.11: Follow standard conventions
 - **GPT-2B OSS** (`gpt2-medium`) — trade reasoning/explanation
 
 ## Recent Changes
+- 002-finbert-sentiment: Added Python 3.12 + torch (>=2.0), transformers (>=4.30), feedparser (6.0.11, already installed)
 
 - 001-core-system-risk Phase 1: Core infrastructure, types, config, logger (COMPLETED)
 - Constitution updated to v1.1: Added FinBERT, LSTM, XGBoost, GPT-2B, local-first architecture

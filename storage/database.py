@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from core.config import AppConfig
 from core.logger import get_logger
-from core.types import AccountState, TradeSignal
+from core.types import AccountState, NewsItem, TradeSignal
 
 logger = get_logger(__name__)
 
@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS news (
     published_at TIMESTAMP,
     classification TEXT,
     confidence REAL,
-    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    content_hash TEXT UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS account_state (
@@ -75,9 +76,15 @@ CREATE TABLE IF NOT EXISTS account_state (
     open_positions INTEGER DEFAULT 0,
     daily_pnl REAL DEFAULT 0.0,
     kill_switch_active INTEGER DEFAULT 0,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    blackout_until TIMESTAMP
 );
 """
+
+_MIGRATION_SQL = [
+    "ALTER TABLE news ADD COLUMN content_hash TEXT",
+    "ALTER TABLE account_state ADD COLUMN blackout_until TIMESTAMP",
+]
 
 
 class Database:
@@ -89,8 +96,17 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA_SQL)
+        self._run_migrations()
         self._init_account_state(config.initial_capital)
         logger.info("Database initialized at %s", self._db_path)
+
+    def _run_migrations(self) -> None:
+        for sql in _MIGRATION_SQL:
+            try:
+                self._conn.execute(sql)
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass
 
     def _init_account_state(self, initial_capital: float) -> None:
         row = self._conn.execute("SELECT COUNT(*) FROM account_state").fetchone()
@@ -288,6 +304,79 @@ class Database:
                 vals,
             )
         self._conn.commit()
+
+    def save_news(
+        self,
+        item: NewsItem,
+        classification: str,
+        confidence: float,
+        content_hash: str,
+    ) -> None:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        self._conn.execute(
+            """INSERT OR IGNORE INTO news
+               (source, headline, url, published_at, classification, confidence, content_hash, collected_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                item.source,
+                item.headline,
+                item.url,
+                item.published_at.isoformat(),
+                classification,
+                confidence,
+                content_hash,
+                now,
+            ),
+        )
+        self._conn.commit()
+
+    def get_recent_news(self, hours: float) -> list[dict]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        rows = self._conn.execute(
+            """SELECT * FROM news
+               WHERE collected_at >= ?
+               ORDER BY collected_at DESC""",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def check_hash_exists(self, content_hash: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM news WHERE content_hash = ?", (content_hash,)
+        ).fetchone()
+        return row is not None
+
+    def set_blackout_until(self, timestamp: datetime) -> None:
+        self._conn.execute(
+            "UPDATE account_state SET blackout_until = ?", (timestamp.isoformat(),)
+        )
+        self._conn.commit()
+
+    def is_blackout_active(self) -> bool:
+        row = self._conn.execute(
+            "SELECT blackout_until FROM account_state ORDER BY id LIMIT 1"
+        ).fetchone()
+        if row is None or row["blackout_until"] is None:
+            return False
+        blackout_ts = datetime.fromisoformat(row["blackout_until"])
+        if isinstance(blackout_ts.tzinfo, type(None)):
+            blackout_ts = blackout_ts.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) < blackout_ts
+
+    def clear_expired_blackout(self) -> None:
+        row = self._conn.execute(
+            "SELECT blackout_until FROM account_state ORDER BY id LIMIT 1"
+        ).fetchone()
+        if row is None or row["blackout_until"] is None:
+            return
+        blackout_ts = datetime.fromisoformat(row["blackout_until"])
+        if isinstance(blackout_ts.tzinfo, type(None)):
+            blackout_ts = blackout_ts.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) >= blackout_ts:
+            self._conn.execute("UPDATE account_state SET blackout_until = NULL")
+            self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
