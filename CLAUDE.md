@@ -1,12 +1,14 @@
 # traiding_system Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-03-30
+Auto-generated from all feature plans. Last updated: 2026-04-05
 
 ## Active Technologies
 - Python 3.12 + torch (>=2.0), transformers (>=4.30), feedparser (6.0.11, already installed) (002-finbert-sentiment)
 - SQLite (existing — add `content_hash` column to news table, `blackout_until` to account_state) (002-finbert-sentiment)
 - Python 3.12 + torch (>=2.0), transformers (>=4.30), scikit-learn, xgboost, pandas, numpy, ta (003-ai-decision-engine)
 - SQLite (existing — `storage/database.py`) (003-ai-decision-engine)
+- Python 3.12 (matching existing codebase) + pandas (CSV parsing), numpy (metrics), existing pipeline agents (ChartAgent, SignalAgent, PredictionAgent, RiskAgent), existing models (LSTM, XGBoost), vectorbt (optional strategy wrapper) (004-backtesting-engine)
+- SQLite (existing `storage/database.py` — extend with backtest tables) (004-backtesting-engine)
 
 - Python 3.11 + pandas, numpy, ta, requests, python-dotenv, apscheduler, python-telegram-bot, feedparser (Phase 1: core-system-risk)
 - torch, transformers (Phase 2: FinBERT sentiment)
@@ -56,10 +58,10 @@ Python 3.11: Follow standard conventions
 - **GPT-OSS-20B** (`openai/gpt-oss-20b` via Ollama) — trade reasoning/explanation
 
 ## Recent Changes
+- 004-backtesting-engine: Added Python 3.12 (matching existing codebase) + pandas (CSV parsing), numpy (metrics), existing pipeline agents (ChartAgent, SignalAgent, PredictionAgent, RiskAgent), existing models (LSTM, XGBoost), vectorbt (optional strategy wrapper)
 - 003-ai-decision-engine: Added Python 3.12 + torch (>=2.0), transformers (>=4.30), scikit-learn, xgboost, pandas, numpy, ta
 - 002-finbert-sentiment: Added Python 3.12 + torch (>=2.0), transformers (>=4.30), feedparser (6.0.11, already installed)
 
-- 001-core-system-risk Phase 1: Core infrastructure, types, config, logger (COMPLETED)
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

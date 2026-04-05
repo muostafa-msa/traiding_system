@@ -13,12 +13,22 @@ class RiskAgent:
         self._config = config
         self._db = database
 
-    def evaluate(self, signal: TradeSignal) -> RiskVerdict:
-        state = self._db.get_account_state()
-        capital = state.capital
-        daily_pnl = state.daily_pnl
-        open_positions = state.open_positions
-        kill_active = state.kill_switch_active
+    def evaluate(
+        self,
+        signal: TradeSignal,
+        account_override: dict | None = None,
+    ) -> RiskVerdict:
+        if account_override is not None:
+            capital = account_override["capital"]
+            daily_pnl = account_override["daily_pnl"]
+            open_positions = account_override["open_positions"]
+            kill_active = account_override["kill_switch_active"]
+        else:
+            state = self._db.get_account_state()
+            capital = state.capital
+            daily_pnl = state.daily_pnl
+            open_positions = state.open_positions
+            kill_active = state.kill_switch_active
 
         daily_risk_used = abs(min(daily_pnl, 0)) / capital if capital > 0 else 0.0
 
@@ -35,7 +45,8 @@ class RiskAgent:
         if capital > 0 and daily_pnl < 0:
             daily_loss_pct = abs(daily_pnl) / capital
             if daily_loss_pct > self._config.kill_switch_threshold:
-                self._db.update_account_state(kill_switch_active=True)
+                if account_override is None:
+                    self._db.update_account_state(kill_switch_active=True)
                 logger.warning(
                     "Kill switch activated: daily loss %.2f%% exceeds %.2f%%",
                     daily_loss_pct * 100,
@@ -64,7 +75,11 @@ class RiskAgent:
                 open_positions=open_positions,
             )
 
-        current_open = self._db.get_open_positions_count()
+        current_open = (
+            open_positions
+            if account_override is not None
+            else self._db.get_open_positions_count()
+        )
         if current_open >= self._config.max_open_positions:
             logger.info(
                 "Signal rejected: %d open positions (max %d)",
@@ -79,7 +94,7 @@ class RiskAgent:
                 open_positions=current_open,
             )
 
-        if self._db.is_blackout_active():
+        if account_override is None and self._db.is_blackout_active():
             logger.info("Signal rejected: news blackout period active")
             return RiskVerdict(
                 approved=False,

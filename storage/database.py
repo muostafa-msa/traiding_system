@@ -8,6 +8,55 @@ from core.config import AppConfig
 from core.logger import get_logger
 from core.types import AccountState, NewsItem, TradeSignal
 
+_BACKTEST_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS backtest_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    csv_file TEXT NOT NULL,
+    asset TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    start_date TIMESTAMP NOT NULL,
+    end_date TIMESTAMP NOT NULL,
+    initial_capital REAL NOT NULL,
+    final_capital REAL,
+    total_bars INTEGER NOT NULL,
+    total_trades INTEGER NOT NULL DEFAULT 0,
+    win_rate REAL,
+    profit_factor REAL,
+    sharpe_ratio REAL,
+    max_drawdown REAL,
+    avg_reward_risk REAL,
+    total_return REAL,
+    rejected_signals INTEGER NOT NULL DEFAULT 0,
+    parameters TEXT,
+    scoring_method TEXT NOT NULL DEFAULT 'fallback',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS backtest_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES backtest_runs(id),
+    direction TEXT NOT NULL,
+    entry_bar_index INTEGER NOT NULL,
+    exit_bar_index INTEGER NOT NULL,
+    entry_timestamp TIMESTAMP NOT NULL,
+    exit_timestamp TIMESTAMP NOT NULL,
+    entry_price REAL NOT NULL,
+    exit_price REAL NOT NULL,
+    stop_loss REAL NOT NULL,
+    take_profit REAL NOT NULL,
+    position_size REAL NOT NULL,
+    pnl REAL NOT NULL,
+    pnl_percent REAL NOT NULL,
+    exit_reason TEXT NOT NULL,
+    probability REAL NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_trades_run_id ON backtest_trades(run_id);
+CREATE INDEX IF NOT EXISTS idx_backtest_runs_created_at ON backtest_runs(created_at);
+CREATE INDEX IF NOT EXISTS idx_backtest_runs_asset_timeframe ON backtest_runs(asset, timeframe);
+"""
+
 logger = get_logger(__name__)
 
 _SCHEMA_SQL = """
@@ -96,6 +145,7 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA_SQL)
+        self._conn.executescript(_BACKTEST_SCHEMA_SQL)
         self._run_migrations()
         self._init_account_state(config.initial_capital)
         logger.info("Database initialized at %s", self._db_path)
@@ -377,6 +427,86 @@ class Database:
         if datetime.now(timezone.utc) >= blackout_ts:
             self._conn.execute("UPDATE account_state SET blackout_until = NULL")
             self._conn.commit()
+
+    def save_backtest_run(self, run: dict) -> int:
+        cursor = self._conn.execute(
+            """INSERT INTO backtest_runs
+               (csv_file, asset, timeframe, start_date, end_date, initial_capital,
+                final_capital, total_bars, total_trades, win_rate, profit_factor,
+                sharpe_ratio, max_drawdown, avg_reward_risk, total_return,
+                rejected_signals, parameters, scoring_method)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                run["csv_file"],
+                run["asset"],
+                run["timeframe"],
+                run["start_date"],
+                run["end_date"],
+                run["initial_capital"],
+                run["final_capital"],
+                run["total_bars"],
+                run["total_trades"],
+                run.get("win_rate"),
+                run.get("profit_factor"),
+                run.get("sharpe_ratio"),
+                run.get("max_drawdown"),
+                run.get("avg_reward_risk"),
+                run.get("total_return"),
+                run.get("rejected_signals", 0),
+                run.get("parameters"),
+                run.get("scoring_method", "fallback"),
+            ),
+        )
+        self._conn.commit()
+        return cursor.lastrowid
+
+    def save_backtest_trade(self, trade: dict) -> int:
+        cursor = self._conn.execute(
+            """INSERT INTO backtest_trades
+               (run_id, direction, entry_bar_index, exit_bar_index,
+                entry_timestamp, exit_timestamp, entry_price, exit_price,
+                stop_loss, take_profit, position_size, pnl, pnl_percent,
+                exit_reason, probability)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                trade["run_id"],
+                trade["direction"],
+                trade["entry_bar_index"],
+                trade["exit_bar_index"],
+                trade["entry_timestamp"],
+                trade["exit_timestamp"],
+                trade["entry_price"],
+                trade["exit_price"],
+                trade["stop_loss"],
+                trade["take_profit"],
+                trade["position_size"],
+                trade["pnl"],
+                trade["pnl_percent"],
+                trade["exit_reason"],
+                trade["probability"],
+            ),
+        )
+        self._conn.commit()
+        return cursor.lastrowid
+
+    def get_backtest_run(self, run_id: int) -> dict:
+        row = self._conn.execute(
+            "SELECT * FROM backtest_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def list_backtest_runs(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM backtest_runs ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_backtest_trades(self, run_id: int) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM backtest_trades WHERE run_id = ? ORDER BY entry_bar_index",
+            (run_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         self._conn.close()
