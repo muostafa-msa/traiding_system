@@ -63,5 +63,11 @@ backtesting/results/
 
 # ML models (downloaded weights)
 models/finbert/
+models/lstm/
+models/xgboost/
+models/gpt2/
 models/**/*.bin
 models/**/*.safetensors
+models/**/*.pt
+models/**/*.pth
+models/**/*.json

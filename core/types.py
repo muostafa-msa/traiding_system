@@ -162,3 +162,198 @@ class MacroSentiment:
     sentiments: list[SentimentResult] = field(default_factory=list)
     is_blackout: bool = False
     blackout_activated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class PatternResult:
+    pattern_type: str
+    confidence: float
+    direction: str
+    price_level: float
+
+    def __post_init__(self):
+        valid_types = (
+            "breakout",
+            "triangle",
+            "double_top",
+            "double_bottom",
+            "head_shoulders",
+            "range",
+        )
+        if self.pattern_type not in valid_types:
+            raise ValueError(
+                f"pattern_type must be one of {valid_types}, got {self.pattern_type}"
+            )
+        if not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(f"confidence must be in [0.0, 1.0], got {self.confidence}")
+        if self.direction not in ("BUY", "SELL", "NEUTRAL"):
+            raise ValueError(
+                f"direction must be BUY/SELL/NEUTRAL, got {self.direction}"
+            )
+        if self.price_level <= 0:
+            raise ValueError(f"price_level must be > 0, got {self.price_level}")
+
+
+@dataclass
+class PatternDetectionResult:
+    patterns: list[PatternResult] = field(default_factory=list)
+    strongest_confidence: float = 0.0
+    strongest_direction: str = "NEUTRAL"
+
+    def __post_init__(self):
+        if self.patterns and self.strongest_confidence == 0.0:
+            best = max(self.patterns, key=lambda p: p.confidence)
+            self.strongest_confidence = best.confidence
+            self.strongest_direction = best.direction
+        if not (0.0 <= self.strongest_confidence <= 1.0):
+            raise ValueError(
+                f"strongest_confidence must be in [0.0, 1.0], got {self.strongest_confidence}"
+            )
+        if self.strongest_direction not in ("BUY", "SELL", "NEUTRAL"):
+            raise ValueError(
+                f"strongest_direction must be BUY/SELL/NEUTRAL, got {self.strongest_direction}"
+            )
+
+
+@dataclass(frozen=True)
+class PricePrediction:
+    direction: str
+    confidence: float
+    volatility: float
+    trend_strength: float
+    horizon_bars: int
+
+    def __post_init__(self):
+        if self.direction not in ("BUY", "SELL", "NEUTRAL"):
+            raise ValueError(
+                f"direction must be BUY/SELL/NEUTRAL, got {self.direction}"
+            )
+        if not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(f"confidence must be in [0.0, 1.0], got {self.confidence}")
+        if self.volatility < 0.0:
+            raise ValueError(f"volatility must be >= 0.0, got {self.volatility}")
+        if not (0.0 <= self.trend_strength <= 1.0):
+            raise ValueError(
+                f"trend_strength must be in [0.0, 1.0], got {self.trend_strength}"
+            )
+        if self.horizon_bars <= 0:
+            raise ValueError(f"horizon_bars must be > 0, got {self.horizon_bars}")
+
+
+@dataclass(frozen=True)
+class ClarityScore:
+    timeframe: str
+    indicator_agreement: float
+    pattern_confidence: float
+    data_completeness: float
+    composite: float = 0.0
+
+    def __post_init__(self):
+        valid_timeframes = ("5m", "15m", "1h", "4h")
+        if self.timeframe not in valid_timeframes:
+            raise ValueError(
+                f"timeframe must be one of {valid_timeframes}, got {self.timeframe}"
+            )
+        for name in ("indicator_agreement", "pattern_confidence", "data_completeness"):
+            val = getattr(self, name)
+            if not (0.0 <= val <= 1.0):
+                raise ValueError(f"{name} must be in [0.0, 1.0], got {val}")
+        computed = (
+            0.5 * self.indicator_agreement
+            + 0.3 * self.pattern_confidence
+            + 0.2 * self.data_completeness
+        )
+        object.__setattr__(self, "composite", computed)
+        if not (0.0 <= self.composite <= 1.0):
+            raise ValueError(f"composite must be in [0.0, 1.0], got {self.composite}")
+
+
+@dataclass
+class TimeframeAnalysis:
+    timeframe: str
+    indicators: IndicatorResult
+    patterns: PatternDetectionResult
+    clarity: ClarityScore
+    bars: list[OHLCBar]
+    timestamp: datetime
+
+    def __post_init__(self):
+        valid_timeframes = ("5m", "15m", "1h", "4h")
+        if self.timeframe not in valid_timeframes:
+            raise ValueError(
+                f"timeframe must be one of {valid_timeframes}, got {self.timeframe}"
+            )
+        if not self.bars:
+            raise ValueError("bars must be non-empty")
+
+
+@dataclass
+class FeatureVector:
+    indicator_features: dict[str, float] = field(default_factory=dict)
+    pattern_features: dict[str, float] = field(default_factory=dict)
+    sentiment_features: dict[str, float] = field(default_factory=dict)
+    prediction_features: dict[str, float] = field(default_factory=dict)
+    derived_features: dict[str, float] = field(default_factory=dict)
+
+    def to_array(self) -> list[float]:
+        result: list[float] = []
+        for key in self.feature_names():
+            result.append(self._get_feature(key))
+        return result
+
+    def feature_names(self) -> list[str]:
+        names: list[str] = []
+        names.extend(sorted(self.indicator_features.keys()))
+        names.extend(sorted(self.pattern_features.keys()))
+        names.extend(sorted(self.sentiment_features.keys()))
+        names.extend(sorted(self.prediction_features.keys()))
+        names.extend(sorted(self.derived_features.keys()))
+        return names
+
+    def _get_feature(self, key: str) -> float:
+        for d in (
+            self.indicator_features,
+            self.pattern_features,
+            self.sentiment_features,
+            self.prediction_features,
+            self.derived_features,
+        ):
+            if key in d:
+                return d[key]
+        return 0.0
+
+
+@dataclass(frozen=True)
+class SignalDecision:
+    probability: float
+    direction: str
+    explanation: str
+    scoring_method: str
+    feature_vector: FeatureVector
+    timeframe: str
+    clarity_score: float
+
+    def __post_init__(self):
+        if not (0.0 <= self.probability <= 1.0):
+            raise ValueError(
+                f"probability must be in [0.0, 1.0], got {self.probability}"
+            )
+        if self.direction not in ("BUY", "SELL", "NO_TRADE"):
+            raise ValueError(
+                f"direction must be BUY/SELL/NO_TRADE, got {self.direction}"
+            )
+        if self.scoring_method not in ("xgboost", "fallback"):
+            raise ValueError(
+                f"scoring_method must be xgboost/fallback, got {self.scoring_method}"
+            )
+        valid_timeframes = ("5m", "15m", "1h", "4h")
+        if self.timeframe not in valid_timeframes:
+            raise ValueError(
+                f"timeframe must be one of {valid_timeframes}, got {self.timeframe}"
+            )
+        if not (0.0 <= self.clarity_score <= 1.0):
+            raise ValueError(
+                f"clarity_score must be in [0.0, 1.0], got {self.clarity_score}"
+            )
+        if self.direction != "NO_TRADE" and not self.explanation.strip():
+            raise ValueError("explanation must be non-empty when direction != NO_TRADE")

@@ -29,12 +29,32 @@ class AppConfig:
     sentiment_window_hours: float
     finbert_model_path: str
     model_device: str
+    lstm_model_path: str
+    xgboost_model_path: str
+    ollama_base_url: str
+    ollama_model: str
+    fallback_weight_indicators: float
+    fallback_weight_patterns: float
+    fallback_weight_sentiment: float
+    fallback_weight_prediction: float
+    explanation_max_tokens: int
+    explanation_temperature: float
+    lstm_sequence_length: int
+    decision_window_minutes: int
 
     def __post_init__(self):
         if not self.market_data_provider:
             raise ValueError("MARKET_DATA_PROVIDER is required")
         if self.initial_capital <= 0:
             raise ValueError(f"INITIAL_CAPITAL must be > 0, got {self.initial_capital}")
+        weights_sum = (
+            self.fallback_weight_indicators
+            + self.fallback_weight_patterns
+            + self.fallback_weight_sentiment
+            + self.fallback_weight_prediction
+        )
+        if abs(weights_sum - 1.0) > 0.01:
+            raise ValueError(f"Fallback weights must sum to 1.0, got {weights_sum}")
 
 
 def load_config(env_path: str | None = None) -> AppConfig:
@@ -67,4 +87,24 @@ def load_config(env_path: str | None = None) -> AppConfig:
         sentiment_window_hours=float(os.environ.get("SENTIMENT_WINDOW_HOURS", "4.0")),
         finbert_model_path=os.environ.get("FINBERT_MODEL_PATH", "models/finbert"),
         model_device=os.environ.get("MODEL_DEVICE", "auto"),
+        lstm_model_path=os.environ.get("LSTM_MODEL_PATH", "models/lstm"),
+        xgboost_model_path=os.environ.get("XGBOOST_MODEL_PATH", "models/xgboost"),
+        ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+        ollama_model=os.environ.get("OLLAMA_MODEL", "gpt-oss:20b"),
+        fallback_weight_indicators=float(
+            os.environ.get("FALLBACK_WEIGHT_INDICATORS", "0.30")
+        ),
+        fallback_weight_patterns=float(
+            os.environ.get("FALLBACK_WEIGHT_PATTERNS", "0.20")
+        ),
+        fallback_weight_sentiment=float(
+            os.environ.get("FALLBACK_WEIGHT_SENTIMENT", "0.25")
+        ),
+        fallback_weight_prediction=float(
+            os.environ.get("FALLBACK_WEIGHT_PREDICTION", "0.25")
+        ),
+        explanation_max_tokens=int(os.environ.get("EXPLANATION_MAX_TOKENS", "150")),
+        explanation_temperature=float(os.environ.get("EXPLANATION_TEMPERATURE", "0.7")),
+        lstm_sequence_length=int(os.environ.get("LSTM_SEQUENCE_LENGTH", "60")),
+        decision_window_minutes=int(os.environ.get("DECISION_WINDOW_MINUTES", "15")),
     )

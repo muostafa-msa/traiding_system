@@ -49,6 +49,8 @@ def format_trade_signal(signal: TradeSignal, risk: RiskVerdict) -> str:
         f"Take Profit: {signal.take_profit:.2f}",
         f"Position Size: {risk.position_size:.4f}",
         f"Confidence: {signal.probability:.0%}",
-        f"Reason: {signal.reasoning}",
+        "",
+        f"── Analysis ──",
+        f"{signal.reasoning}",
     ]
     return "\n".join(lines)
