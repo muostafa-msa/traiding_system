@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -507,6 +508,128 @@ class Database:
             (run_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def _compute_sharpe_ratio(self, returns: list[float]) -> float:
+        if len(returns) < 2:
+            return 0.0
+        mean_r = sum(returns) / len(returns)
+        variance = sum((r - mean_r) ** 2 for r in returns) / len(returns)
+        std_r = math.sqrt(variance)
+        if std_r == 0:
+            return 0.0
+        return (mean_r / std_r) * math.sqrt(252)
+
+    def _compute_max_drawdown(self, pnls: list[float], initial_capital: float) -> float:
+        if not pnls or initial_capital <= 0:
+            return 0.0
+        equity = initial_capital
+        peak = equity
+        max_dd = 0.0
+        for pnl in pnls:
+            equity += pnl
+            if equity > peak:
+                peak = equity
+            dd = (peak - equity) / peak
+            if dd > max_dd:
+                max_dd = dd
+        return max_dd * 100
+
+    def get_performance_summary(self, period: str = "daily") -> dict:
+        now = datetime.now(timezone.utc)
+        if period == "daily":
+            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        elif period == "weekly":
+            cutoff = (now - timedelta(days=7)).isoformat()
+        elif period == "monthly":
+            cutoff = (now - timedelta(days=30)).isoformat()
+        else:
+            cutoff = None
+
+        if cutoff is not None:
+            signal_count = self._conn.execute(
+                "SELECT COUNT(*) FROM signals WHERE created_at >= ?",
+                (cutoff,),
+            ).fetchone()[0]
+        else:
+            signal_count = self._conn.execute(
+                "SELECT COUNT(*) FROM signals"
+            ).fetchone()[0]
+
+        if cutoff is not None:
+            closed_row = self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END), 0), "
+                "COALESCE(SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END), 0), "
+                "COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0.0), "
+                "COALESCE(SUM(CASE WHEN pnl <= 0 THEN ABS(pnl) ELSE 0 END), 0.0) "
+                "FROM trades WHERE closed_at IS NOT NULL AND closed_at >= ?",
+                (cutoff,),
+            ).fetchone()
+        else:
+            closed_row = self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END), 0), "
+                "COALESCE(SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END), 0), "
+                "COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0.0), "
+                "COALESCE(SUM(CASE WHEN pnl <= 0 THEN ABS(pnl) ELSE 0 END), 0.0) "
+                "FROM trades WHERE closed_at IS NOT NULL"
+            ).fetchone()
+
+        total_trades = closed_row[0]
+        wins = closed_row[1]
+        losses = closed_row[2]
+        gross_profit = closed_row[3]
+        gross_loss = closed_row[4]
+
+        open_trades = self._conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE closed_at IS NULL"
+        ).fetchone()[0]
+
+        win_rate = wins / total_trades if total_trades > 0 else 0.0
+        net_pnl = gross_profit - gross_loss
+
+        if gross_loss == 0 and gross_profit > 0:
+            profit_factor = float("inf")
+        elif gross_loss == 0:
+            profit_factor = 0.0
+        else:
+            profit_factor = gross_profit / gross_loss
+
+        if cutoff is not None:
+            pnl_rows = self._conn.execute(
+                "SELECT pnl, pnl_percent FROM trades WHERE closed_at IS NOT NULL AND closed_at >= ? ORDER BY closed_at",
+                (cutoff,),
+            ).fetchall()
+        else:
+            pnl_rows = self._conn.execute(
+                "SELECT pnl, pnl_percent FROM trades WHERE closed_at IS NOT NULL ORDER BY closed_at"
+            ).fetchall()
+
+        returns = [(r[1] / 100.0) for r in pnl_rows if r[1] is not None]
+        sharpe_ratio = self._compute_sharpe_ratio(returns)
+
+        initial_capital = self._conn.execute(
+            "SELECT capital FROM account_state ORDER BY id LIMIT 1"
+        ).fetchone()[0]
+
+        pnls = [r[0] for r in pnl_rows if r[0] is not None]
+        max_drawdown = self._compute_max_drawdown(pnls, initial_capital)
+        total_return = (net_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
+
+        return {
+            "period": period,
+            "total_signals": signal_count,
+            "total_trades": total_trades,
+            "open_trades": open_trades,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
+            "gross_profit": gross_profit,
+            "gross_loss": gross_loss,
+            "profit_factor": profit_factor,
+            "net_pnl": net_pnl,
+            "sharpe_ratio": sharpe_ratio,
+            "max_drawdown": max_drawdown,
+            "total_return": total_return,
+        }
 
     def close(self) -> None:
         self._conn.close()

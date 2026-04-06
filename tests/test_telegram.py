@@ -177,26 +177,117 @@ class TestLastSignalCommand:
 
 class TestPerformanceCommand:
     @pytest.mark.asyncio
-    async def test_performance_returns_daily_stats(self, bot: TelegramBot):
+    async def test_performance_zero_activity(self, bot: TelegramBot):
         update = _make_update("123456")
         await bot._cmd_performance(update, None)
         update.message.reply_text.assert_called_once()
         msg = update.message.reply_text.call_args[0][0]
-        assert "DAILY PERFORMANCE" in msg
-        assert "Total Signals: 0" in msg
-        assert "Daily P&L: 0.00" in msg
+        assert "PERFORMANCE (Today)" in msg
+        assert "No trading activity." in msg
 
     @pytest.mark.asyncio
-    async def test_performance_with_data(self, bot: TelegramBot):
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        bot._db.update_daily_performance(
-            today, total_signals=5, trades_taken=3, win_rate=0.667, profit_factor=2.1
+    async def test_performance_with_trades(self, bot: TelegramBot):
+        signal = TradeSignal(
+            asset="XAU/USD",
+            direction="BUY",
+            entry_price=2350.0,
+            stop_loss=2335.0,
+            take_profit=2380.0,
+            probability=0.85,
+            reasoning="Test",
+            timeframe="1h",
+            timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
         )
+        sid = bot._db.save_signal(signal, "approved")
+        t1 = bot._db.open_trade(sid, 0.1, 2350.0)
+        bot._db.close_trade(t1, 2370.0, "tp_hit")
+        t2 = bot._db.open_trade(sid, 0.1, 2350.0)
+        bot._db.close_trade(t2, 2330.0, "sl_hit")
         update = _make_update("123456")
         await bot._cmd_performance(update, None)
         msg = update.message.reply_text.call_args[0][0]
-        assert "Total Signals: 5" in msg
-        assert "Win Rate: 66.7%" in msg
+        assert "PERFORMANCE (Today)" in msg
+        assert "Wins: 1 | Losses: 1" in msg
+
+    @pytest.mark.asyncio
+    async def test_performance_weekly_header(self, bot: TelegramBot):
+        update = _make_update("123456")
+        context = MagicMock()
+        context.args = ["weekly"]
+        await bot._cmd_performance(update, context)
+        msg = update.message.reply_text.call_args[0][0]
+        assert "PERFORMANCE (Last 7 Days)" in msg
+
+    @pytest.mark.asyncio
+    async def test_performance_all_header(self, bot: TelegramBot):
+        update = _make_update("123456")
+        context = MagicMock()
+        context.args = ["all"]
+        await bot._cmd_performance(update, context)
+        msg = update.message.reply_text.call_args[0][0]
+        assert "PERFORMANCE (All Time)" in msg
+
+    @pytest.mark.asyncio
+    async def test_performance_invalid_shows_help(self, bot: TelegramBot):
+        update = _make_update("123456")
+        context = MagicMock()
+        context.args = ["invalid"]
+        await bot._cmd_performance(update, context)
+        msg = update.message.reply_text.call_args[0][0]
+        assert "Usage: /performance [period]" in msg
+        assert "Periods: daily, weekly, monthly, all" in msg
+
+    @pytest.mark.asyncio
+    async def test_performance_daily_same_as_no_args(self, bot: TelegramBot):
+        update = _make_update("123456")
+        context = MagicMock()
+        context.args = ["daily"]
+        await bot._cmd_performance(update, context)
+        msg = update.message.reply_text.call_args[0][0]
+        assert "PERFORMANCE (Today)" in msg
+
+    @pytest.mark.asyncio
+    async def test_performance_shows_drawdown_and_return(self, bot: TelegramBot):
+        signal = TradeSignal(
+            asset="XAU/USD",
+            direction="BUY",
+            entry_price=2350.0,
+            stop_loss=2335.0,
+            take_profit=2380.0,
+            probability=0.85,
+            reasoning="Test",
+            timeframe="1h",
+            timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+        )
+        sid = bot._db.save_signal(signal, "approved")
+        t1 = bot._db.open_trade(sid, 0.1, 2350.0)
+        bot._db.close_trade(t1, 2370.0, "tp_hit")
+        update = _make_update("123456")
+        await bot._cmd_performance(update, None)
+        msg = update.message.reply_text.call_args[0][0]
+        assert "Max Drawdown:" in msg
+        assert "Total Return: +" in msg
+
+    @pytest.mark.asyncio
+    async def test_performance_negative_return_sign(self, bot: TelegramBot):
+        signal = TradeSignal(
+            asset="XAU/USD",
+            direction="BUY",
+            entry_price=2350.0,
+            stop_loss=2335.0,
+            take_profit=2380.0,
+            probability=0.85,
+            reasoning="Test",
+            timeframe="1h",
+            timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+        )
+        sid = bot._db.save_signal(signal, "approved")
+        t1 = bot._db.open_trade(sid, 0.1, 2350.0)
+        bot._db.close_trade(t1, 2330.0, "sl_hit")
+        update = _make_update("123456")
+        await bot._cmd_performance(update, None)
+        msg = update.message.reply_text.call_args[0][0]
+        assert "Total Return: -" in msg
 
 
 class TestKillCommand:
