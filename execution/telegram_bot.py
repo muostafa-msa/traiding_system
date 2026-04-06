@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from core.config import AppConfig
 from core.logger import get_logger
 from storage.database import Database
+from execution.signal_generator import format_performance_summary
 
 logger = get_logger(__name__)
 
@@ -85,7 +86,11 @@ class TelegramBot:
             hours, remainder = divmod(int(delta.total_seconds()), 3600)
             mins, _ = divmod(remainder, 60)
             uptime = f"{hours}h {mins}m"
-        last_cycle = self.last_cycle_time.strftime("%H:%M:%S UTC") if self.last_cycle_time else "N/A"
+        last_cycle = (
+            self.last_cycle_time.strftime("%H:%M:%S UTC")
+            if self.last_cycle_time
+            else "N/A"
+        )
         msg = (
             f"SYSTEM STATUS\n"
             f"Uptime: {uptime or 'N/A'}\n"
@@ -119,17 +124,20 @@ class TelegramBot:
     async def _cmd_performance(self, update, context) -> None:
         if not await self._check_chat_id(update, context):
             return
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        perf = self._db.get_daily_performance(today)
-        state = self._db.get_account_state()
-        msg = (
-            f"DAILY PERFORMANCE ({today})\n"
-            f"Total Signals: {perf['total_signals']}\n"
-            f"Trades Taken: {perf['trades_taken']}\n"
-            f"Win Rate: {perf['win_rate']:.1%}\n"
-            f"Profit Factor: {perf['profit_factor']:.2f}\n"
-            f"Daily P&L: {state.daily_pnl:.2f}"
-        )
+        allowed_periods = ("daily", "weekly", "monthly", "all")
+        period = "daily"
+        if context and context.args:
+            arg = context.args[0].lower()
+            if arg not in allowed_periods:
+                await update.message.reply_text(
+                    "Usage: /performance [period]\n"
+                    "Periods: daily, weekly, monthly, all\n"
+                    "Default: daily"
+                )
+                return
+            period = arg
+        summary = self._db.get_performance_summary(period)
+        msg = format_performance_summary(summary)
         await update.message.reply_text(msg)
 
     async def _cmd_kill(self, update, context) -> None:

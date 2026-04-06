@@ -38,6 +38,56 @@ def format_indicator_summary(
     return "\n".join(lines)
 
 
+def format_performance_summary(summary: dict) -> str:
+    period_labels = {
+        "daily": "Today",
+        "weekly": "Last 7 Days",
+        "monthly": "Last 30 Days",
+        "all": "All Time",
+    }
+    label = period_labels.get(summary.get("period", "daily"), "Today")
+    total_trades = summary.get("total_trades", 0)
+    total_signals = summary.get("total_signals", 0)
+
+    if total_trades == 0 and total_signals == 0:
+        return (
+            f"PERFORMANCE ({label})\n"
+            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2501\n"
+            f"No trading activity.\n"
+            f"Signals: 0 | Trades: 0"
+        )
+
+    pf = summary.get("profit_factor", 0.0)
+    if pf == float("inf"):
+        pf_str = "\u221e"
+    else:
+        pf_str = f"{pf:.2f}"
+
+    net = summary.get("net_pnl", 0.0)
+    sign = "+" if net >= 0 else ""
+    net_str = f"{sign}{net:.2f}"
+
+    wr = summary.get("win_rate", 0.0) * 100
+
+    md = summary.get("max_drawdown", 0.0)
+    tr = summary.get("total_return", 0.0)
+    tr_sign = "+" if tr >= 0 else ""
+
+    return (
+        f"PERFORMANCE ({label})\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2501\n"
+        f"Signals: {total_signals}\n"
+        f"Trades: {total_trades} ({summary.get('open_trades', 0)} open)\n"
+        f"Wins: {summary.get('wins', 0)} | Losses: {summary.get('losses', 0)}\n"
+        f"Win Rate: {wr:.1f}%\n"
+        f"Profit Factor: {pf_str}\n"
+        f"Net P&L: {net_str}\n"
+        f"Sharpe Ratio: {summary.get('sharpe_ratio', 0.0):.2f}\n"
+        f"Max Drawdown: {md:.1f}%\n"
+        f"Total Return: {tr_sign}{tr:.1f}%"
+    )
+
+
 def format_trade_signal(signal: TradeSignal, risk: RiskVerdict) -> str:
     dir_emoji = "🟢" if signal.direction == "BUY" else "🔴"
     lines = [

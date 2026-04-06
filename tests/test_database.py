@@ -311,3 +311,218 @@ class TestBlackout:
         db.set_blackout_until(future)
         db.clear_expired_blackout()
         assert db.is_blackout_active() is True
+
+
+class TestSharpeRatio:
+    def test_sharpe_empty_returns_zero(self, db: Database):
+        assert db._compute_sharpe_ratio([]) == 0.0
+
+    def test_sharpe_single_value_returns_zero(self, db: Database):
+        assert db._compute_sharpe_ratio([0.05]) == 0.0
+
+    def test_sharpe_mixed_values(self, db: Database):
+        returns = [0.01, -0.005, 0.02, -0.01, 0.015]
+        result = db._compute_sharpe_ratio(returns)
+        assert result > 0.0
+
+    def test_sharpe_all_same_returns_zero(self, db: Database):
+        returns = [0.01, 0.01, 0.01]
+        assert db._compute_sharpe_ratio(returns) == 0.0
+
+
+class TestPerformanceSummary:
+    def test_empty_trades_all_zeros(self, db: Database):
+        summary = db.get_performance_summary("daily")
+        assert summary["total_trades"] == 0
+        assert summary["total_signals"] == 0
+        assert summary["wins"] == 0
+        assert summary["losses"] == 0
+        assert summary["win_rate"] == 0.0
+        assert summary["net_pnl"] == 0.0
+        assert summary["sharpe_ratio"] == 0.0
+        assert summary["profit_factor"] == 0.0
+
+    def test_single_trade_sharpe_zero(
+        self, db: Database, sample_buy_signal: TradeSignal
+    ):
+        sid = db.save_signal(sample_buy_signal, "approved")
+        tid = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(tid, 2370.0, "tp_hit")
+        summary = db.get_performance_summary("daily")
+        assert summary["sharpe_ratio"] == 0.0
+
+    def test_mixed_wins_losses(self, db: Database, sample_buy_signal: TradeSignal):
+        sid = db.save_signal(sample_buy_signal, "approved")
+        t1 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t1, 2370.0, "tp_hit")
+        t2 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t2, 2330.0, "sl_hit")
+        t3 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t3, 2380.0, "tp_hit")
+        summary = db.get_performance_summary("daily")
+        assert summary["total_trades"] == 3
+        assert summary["wins"] == 2
+        assert summary["losses"] == 1
+        assert summary["win_rate"] == 2 / 3
+        assert summary["net_pnl"] > 0
+        assert summary["sharpe_ratio"] > 0.0
+
+    def test_all_wins_profit_factor_infinity(
+        self, db: Database, sample_buy_signal: TradeSignal
+    ):
+        sid = db.save_signal(sample_buy_signal, "approved")
+        t1 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t1, 2370.0, "tp_hit")
+        t2 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t2, 2380.0, "tp_hit")
+        summary = db.get_performance_summary("daily")
+        assert summary["profit_factor"] == float("inf")
+
+    def test_breakeven_counted_as_loss(
+        self, db: Database, sample_buy_signal: TradeSignal
+    ):
+        sid = db.save_signal(sample_buy_signal, "approved")
+        tid = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(tid, 2350.0, "manual")
+        summary = db.get_performance_summary("daily")
+        assert summary["losses"] == 1
+        assert summary["wins"] == 0
+
+
+class TestMultiPeriodSummary:
+    def test_daily_returns_only_today_trades(
+        self, db: Database, sample_buy_signal: TradeSignal
+    ):
+        now = datetime.now(timezone.utc)
+        sid = db.save_signal(sample_buy_signal, "approved")
+
+        t1 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t1, 2370.0, "tp_hit")
+
+        yesterday = now - timedelta(days=1)
+        t2 = db.open_trade(sid, 0.1, 2350.0)
+        db._conn.execute(
+            "UPDATE trades SET closed_at = ? WHERE id = ?",
+            (yesterday.isoformat(), t2),
+        )
+        db._conn.commit()
+
+        summary = db.get_performance_summary("daily")
+        assert summary["total_trades"] == 1
+
+    def test_weekly_returns_last_7_days(
+        self, db: Database, sample_buy_signal: TradeSignal
+    ):
+        now = datetime.now(timezone.utc)
+        sid = db.save_signal(sample_buy_signal, "approved")
+
+        t1 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t1, 2370.0, "tp_hit")
+
+        three_days = now - timedelta(days=3)
+        t2 = db.open_trade(sid, 0.1, 2350.0)
+        db._conn.execute(
+            "UPDATE trades SET closed_at = ? WHERE id = ?",
+            (three_days.isoformat(), t2),
+        )
+        db._conn.commit()
+
+        summary = db.get_performance_summary("weekly")
+        assert summary["total_trades"] == 2
+
+    def test_monthly_returns_last_30_days(
+        self, db: Database, sample_buy_signal: TradeSignal
+    ):
+        now = datetime.now(timezone.utc)
+        sid = db.save_signal(sample_buy_signal, "approved")
+
+        t1 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t1, 2370.0, "tp_hit")
+
+        fifteen_days = now - timedelta(days=15)
+        t2 = db.open_trade(sid, 0.1, 2350.0)
+        db._conn.execute(
+            "UPDATE trades SET closed_at = ? WHERE id = ?",
+            (fifteen_days.isoformat(), t2),
+        )
+        db._conn.commit()
+
+        forty_five_days = now - timedelta(days=45)
+        t3 = db.open_trade(sid, 0.1, 2350.0)
+        db._conn.execute(
+            "UPDATE trades SET closed_at = ? WHERE id = ?",
+            (forty_five_days.isoformat(), t3),
+        )
+        db._conn.commit()
+
+        summary = db.get_performance_summary("monthly")
+        assert summary["total_trades"] == 2
+
+    def test_all_returns_everything(self, db: Database, sample_buy_signal: TradeSignal):
+        now = datetime.now(timezone.utc)
+        sid = db.save_signal(sample_buy_signal, "approved")
+
+        t1 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t1, 2370.0, "tp_hit")
+
+        forty_five_days = now - timedelta(days=45)
+        t2 = db.open_trade(sid, 0.1, 2350.0)
+        db._conn.execute(
+            "UPDATE trades SET closed_at = ? WHERE id = ?",
+            (forty_five_days.isoformat(), t2),
+        )
+        db._conn.commit()
+
+        summary = db.get_performance_summary("all")
+        assert summary["total_trades"] == 2
+
+
+class TestDrawdownAndReturn:
+    def test_max_drawdown_no_trades(self, db: Database):
+        assert db._compute_max_drawdown([], 10000.0) == 0.0
+
+    def test_max_drawdown_steady_wins(self, db: Database):
+        pnls = [100.0, 200.0, 150.0]
+        assert db._compute_max_drawdown(pnls, 10000.0) == 0.0
+
+    def test_max_drawdown_win_then_loss(self, db: Database):
+        pnls = [500.0, -300.0]
+        expected = (10500.0 - 10200.0) / 10500.0 * 100
+        assert abs(db._compute_max_drawdown(pnls, 10000.0) - expected) < 0.01
+
+    def test_max_drawdown_all_losses(self, db: Database):
+        pnls = [-200.0, -300.0]
+        expected = 500.0 / 10000.0 * 100
+        assert abs(db._compute_max_drawdown(pnls, 10000.0) - expected) < 0.01
+
+    def test_max_drawdown_zero_capital(self, db: Database):
+        assert db._compute_max_drawdown([100.0], 0.0) == 0.0
+
+    def test_total_return_equals_net_pnl_over_capital(
+        self, db: Database, sample_buy_signal: TradeSignal
+    ):
+        sid = db.save_signal(sample_buy_signal, "approved")
+        t1 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t1, 2370.0, "tp_hit")
+        summary = db.get_performance_summary("daily")
+        expected_return = summary["net_pnl"] / 10000.0 * 100
+        assert abs(summary["total_return"] - expected_return) < 0.01
+
+    def test_no_trades_zero_return_and_drawdown(self, db: Database):
+        summary = db.get_performance_summary("daily")
+        assert summary["max_drawdown"] == 0.0
+        assert summary["total_return"] == 0.0
+
+    def test_summary_includes_drawdown_and_return(
+        self, db: Database, sample_buy_signal: TradeSignal
+    ):
+        sid = db.save_signal(sample_buy_signal, "approved")
+        t1 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t1, 2370.0, "tp_hit")
+        t2 = db.open_trade(sid, 0.1, 2350.0)
+        db.close_trade(t2, 2330.0, "sl_hit")
+        summary = db.get_performance_summary("daily")
+        assert "max_drawdown" in summary
+        assert "total_return" in summary
+        assert summary["max_drawdown"] > 0
+        assert isinstance(summary["total_return"], float)
