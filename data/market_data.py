@@ -38,7 +38,7 @@ class TwelveDataProvider(MarketDataProvider):
         self._base_url = "https://api.twelvedata.com/time_series"
 
     def get_ohlc(self, asset: str, timeframe: str, bars: int = 250) -> list[OHLCBar]:
-        symbol = asset.replace("/", "")
+        symbol = asset
         interval = self.TF_MAP.get(timeframe)
         if interval is None:
             raise MarketDataError(f"Unsupported timeframe: {timeframe}")

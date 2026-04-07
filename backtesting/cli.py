@@ -69,6 +69,12 @@ def main() -> None:
         help="Sentiment score [-1.0, 1.0]",
     )
     parser.add_argument(
+        "--sentiment-file",
+        type=str,
+        default=None,
+        help="JSON file with date->sentiment_score mapping",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -193,6 +199,14 @@ def main() -> None:
             )
             print(report)
         else:
+            sentiment_timeline = None
+            if args.sentiment_file:
+                import json as json_lib
+
+                with open(args.sentiment_file) as sf:
+                    sentiment_timeline = json_lib.load(sf)
+                print(f"Loaded sentiment timeline: {len(sentiment_timeline)} dates")
+
             engine = BacktestEngine(
                 config=config,
                 database=database,
@@ -200,6 +214,7 @@ def main() -> None:
                 timeframe=args.timeframe,
                 initial_capital=args.capital,
                 sentiment_score=args.sentiment_score,
+                sentiment_timeline=sentiment_timeline,
                 verbose=args.verbose,
             )
 

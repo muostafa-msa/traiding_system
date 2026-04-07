@@ -85,6 +85,7 @@ class BacktestEngine:
         timeframe: str = "1h",
         initial_capital: float = 10000.0,
         sentiment_score: float = 0.0,
+        sentiment_timeline: dict[str, float] | None = None,
         verbose: bool = False,
     ):
         self._config = config
@@ -93,6 +94,7 @@ class BacktestEngine:
         self._timeframe = timeframe
         self._initial_capital = initial_capital
         self._sentiment_score = sentiment_score
+        self._sentiment_timeline = sentiment_timeline
         self._verbose = verbose
 
         self._chart_agent = ChartAgent()
@@ -164,8 +166,9 @@ class BacktestEngine:
                 logger.warning("ChartAgent failed at bar %d: %s", i, e)
                 continue
 
+            score = self._get_sentiment_for_date(current_date)
             sentiment = MacroSentiment(
-                macro_score=self._sentiment_score,
+                macro_score=score,
                 headline_count=0,
                 is_blackout=False,
             )
@@ -255,6 +258,11 @@ class BacktestEngine:
             rejected_signals=rejected,
             scoring_method=self._scoring_method,
         )
+
+    def _get_sentiment_for_date(self, date_key: str) -> float:
+        if self._sentiment_timeline and date_key in self._sentiment_timeline:
+            return self._sentiment_timeline[date_key]
+        return self._sentiment_score
 
     def _check_gap(self, bars: list[OHLCBar], index: int) -> bool:
         if index == 0:

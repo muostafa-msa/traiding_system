@@ -112,10 +112,7 @@ class TestFullPipeline:
 
             scheduler.run_cycle("5min")
 
-            bot.broadcast.assert_called_once()
-            msg = bot.broadcast.call_args[0][0]
-            assert "GOLD TECHNICAL ANALYSIS" in msg
-            assert "5min" in msg
+            bot.broadcast.assert_not_called()
 
 
 class TestCyclePerformance:

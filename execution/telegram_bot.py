@@ -47,13 +47,13 @@ class TelegramBot:
             logger.error("Failed to start Telegram bot: %s", e)
 
     def _run_polling(self) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
         try:
-            loop.run_until_complete(self._app.initialize())
-            loop.run_until_complete(self._app.start())
-            loop.run_until_complete(self._app.updater.start_polling())
-            loop.run_forever()
+            self._loop.run_until_complete(self._app.initialize())
+            self._loop.run_until_complete(self._app.start())
+            self._loop.run_until_complete(self._app.updater.start_polling())
+            self._loop.run_forever()
         except Exception as e:
             logger.error("Telegram polling error: %s", e)
 
@@ -164,11 +164,14 @@ class TelegramBot:
         if not self.active or self._app is None:
             logger.info("Broadcast (no-op): %s", message[:100])
             return
+        if not hasattr(self, "_loop") or self._loop is None or self._loop.is_closed():
+            logger.error("Broadcast error: polling loop not available")
+            return
         try:
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(
-                self._app.bot.send_message(chat_id=self._chat_id, text=message)
+            future = asyncio.run_coroutine_threadsafe(
+                self._app.bot.send_message(chat_id=self._chat_id, text=message),
+                self._loop,
             )
-            loop.close()
+            future.result(timeout=10)
         except Exception as e:
             logger.error("Broadcast error: %s", e)

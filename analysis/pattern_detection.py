@@ -9,6 +9,25 @@ MIN_BARS = 50
 SWING_N = 5
 
 
+def _filter_contradictory_patterns(
+    results: list[PatternResult],
+) -> list[PatternResult]:
+    if not results:
+        return results
+
+    non_neutral = [p for p in results if p.direction != "NEUTRAL"]
+    if not non_neutral:
+        return results
+
+    strongest = max(non_neutral, key=lambda p: p.confidence)
+    strongest_dir = strongest.direction
+
+    filtered = [
+        p for p in results if p.direction == strongest_dir or p.direction == "NEUTRAL"
+    ]
+    return filtered
+
+
 def detect_breakout(
     bars: list[OHLCBar], support: float, resistance: float, atr: float
 ) -> PatternResult | None:
@@ -314,6 +333,8 @@ def detect_patterns(
         return PatternDetectionResult(
             patterns=[], strongest_confidence=0.0, strongest_direction="NEUTRAL"
         )
+
+    results = _filter_contradictory_patterns(results)
 
     best = max(results, key=lambda p: p.confidence)
     return PatternDetectionResult(

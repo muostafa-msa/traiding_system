@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from analysis.pattern_detection import (
+    _filter_contradictory_patterns,
     detect_breakout,
     detect_double_bottom,
     detect_double_top,
@@ -13,7 +14,7 @@ from analysis.pattern_detection import (
     detect_range,
     detect_triangle,
 )
-from core.types import OHLCBar, PatternDetectionResult
+from core.types import OHLCBar, PatternDetectionResult, PatternResult
 
 
 def _make_bar(
@@ -333,3 +334,52 @@ class TestPatternConfidenceBounds:
                 assert 0.0 <= result.confidence <= 1.0, (
                     f"confidence {result.confidence} out of range for {result.pattern_type}"
                 )
+
+
+class TestContradictoryPatternFiltering:
+    def test_double_top_and_bottom_only_strongest_kept(self):
+        patterns = [
+            PatternResult("double_top", 0.8, "SELL", 2350.0),
+            PatternResult("double_bottom", 0.6, "BUY", 2280.0),
+        ]
+        filtered = _filter_contradictory_patterns(patterns)
+        directions = {p.direction for p in filtered}
+        assert "BUY" not in directions
+        assert any(p.direction == "SELL" for p in filtered)
+
+    def test_all_neutral_no_filtering(self):
+        patterns = [
+            PatternResult("range", 0.7, "NEUTRAL", 2300.0),
+            PatternResult("range", 0.5, "NEUTRAL", 2300.0),
+        ]
+        filtered = _filter_contradictory_patterns(patterns)
+        assert len(filtered) == 2
+
+    def test_single_pattern_unchanged(self):
+        patterns = [
+            PatternResult("breakout", 0.9, "BUY", 2360.0),
+        ]
+        filtered = _filter_contradictory_patterns(patterns)
+        assert len(filtered) == 1
+        assert filtered[0].pattern_type == "breakout"
+
+    def test_same_direction_both_preserved(self):
+        patterns = [
+            PatternResult("breakout", 0.8, "BUY", 2360.0),
+            PatternResult("triangle", 0.6, "BUY", 2340.0),
+        ]
+        filtered = _filter_contradictory_patterns(patterns)
+        assert len(filtered) == 2
+
+    def test_neutral_preserved_with_directional(self):
+        patterns = [
+            PatternResult("double_top", 0.8, "SELL", 2350.0),
+            PatternResult("range", 0.5, "NEUTRAL", 2300.0),
+        ]
+        filtered = _filter_contradictory_patterns(patterns)
+        assert len(filtered) == 2
+        directions = {p.direction for p in filtered}
+        assert directions == {"SELL", "NEUTRAL"}
+
+    def test_empty_list_unchanged(self):
+        assert _filter_contradictory_patterns([]) == []

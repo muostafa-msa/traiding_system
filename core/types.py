@@ -324,6 +324,42 @@ class FeatureVector:
 
 
 @dataclass(frozen=True)
+class OpportunityScore:
+    trend_strength: float
+    volatility_regime: float
+    pattern_confidence: float
+    prediction_confidence: float
+    sentiment_alignment: float
+    indicator_agreement: float
+    mtf_agreement: float
+    composite: float = 0.0
+
+    def __post_init__(self):
+        for name in (
+            "trend_strength",
+            "volatility_regime",
+            "pattern_confidence",
+            "prediction_confidence",
+            "sentiment_alignment",
+            "indicator_agreement",
+            "mtf_agreement",
+        ):
+            val = getattr(self, name)
+            if not (0.0 <= val <= 1.0):
+                raise ValueError(f"{name} must be in [0.0, 1.0], got {val}")
+        computed = (
+            0.20 * self.trend_strength
+            + 0.15 * self.volatility_regime
+            + 0.15 * self.pattern_confidence
+            + 0.15 * self.prediction_confidence
+            + 0.10 * self.sentiment_alignment
+            + 0.15 * self.indicator_agreement
+            + 0.10 * self.mtf_agreement
+        )
+        object.__setattr__(self, "composite", round(computed, 6))
+
+
+@dataclass(frozen=True)
 class SignalDecision:
     probability: float
     direction: str

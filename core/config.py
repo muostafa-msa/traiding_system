@@ -33,6 +33,7 @@ class AppConfig:
     xgboost_model_path: str
     ollama_base_url: str
     ollama_model: str
+    ollama_enabled: bool
     fallback_weight_indicators: float
     fallback_weight_patterns: float
     fallback_weight_sentiment: float
@@ -40,13 +41,24 @@ class AppConfig:
     explanation_max_tokens: int
     explanation_temperature: float
     lstm_sequence_length: int
+    lstm_direction_threshold: float
     decision_window_minutes: int
+    prediction_agreement_enabled: bool
+    mtf_confirmation_enabled: bool
+    mtf_min_agreeing_timeframes: int
+    opportunity_score_enabled: bool
+    opportunity_score_threshold: float
 
     def __post_init__(self):
         if not self.market_data_provider:
             raise ValueError("MARKET_DATA_PROVIDER is required")
         if self.initial_capital <= 0:
             raise ValueError(f"INITIAL_CAPITAL must be > 0, got {self.initial_capital}")
+        if not (0.0 < self.lstm_direction_threshold < 1.0):
+            raise ValueError(
+                "LSTM_DIRECTION_THRESHOLD must be in (0.0, 1.0), "
+                f"got {self.lstm_direction_threshold}"
+            )
         weights_sum = (
             self.fallback_weight_indicators
             + self.fallback_weight_patterns
@@ -91,6 +103,7 @@ def load_config(env_path: str | None = None) -> AppConfig:
         xgboost_model_path=os.environ.get("XGBOOST_MODEL_PATH", "models/xgboost"),
         ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
         ollama_model=os.environ.get("OLLAMA_MODEL", "gpt-oss:20b"),
+        ollama_enabled=os.environ.get("OLLAMA_ENABLED", "true").lower() == "true",
         fallback_weight_indicators=float(
             os.environ.get("FALLBACK_WEIGHT_INDICATORS", "0.30")
         ),
@@ -106,5 +119,26 @@ def load_config(env_path: str | None = None) -> AppConfig:
         explanation_max_tokens=int(os.environ.get("EXPLANATION_MAX_TOKENS", "150")),
         explanation_temperature=float(os.environ.get("EXPLANATION_TEMPERATURE", "0.7")),
         lstm_sequence_length=int(os.environ.get("LSTM_SEQUENCE_LENGTH", "60")),
+        lstm_direction_threshold=float(
+            os.environ.get("LSTM_DIRECTION_THRESHOLD", "0.15")
+        ),
         decision_window_minutes=int(os.environ.get("DECISION_WINDOW_MINUTES", "15")),
+        prediction_agreement_enabled=os.environ.get(
+            "PREDICTION_AGREEMENT_ENABLED", "true"
+        ).lower()
+        == "true",
+        mtf_confirmation_enabled=os.environ.get(
+            "MTF_CONFIRMATION_ENABLED", "true"
+        ).lower()
+        == "true",
+        mtf_min_agreeing_timeframes=int(
+            os.environ.get("MTF_MIN_AGREEING_TIMEFRAMES", "2")
+        ),
+        opportunity_score_enabled=os.environ.get(
+            "OPPORTUNITY_SCORE_ENABLED", "true"
+        ).lower()
+        == "true",
+        opportunity_score_threshold=float(
+            os.environ.get("OPPORTUNITY_SCORE_THRESHOLD", "0.55")
+        ),
     )

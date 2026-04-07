@@ -11,6 +11,7 @@ from agents.chart_agent import (
     compute_data_completeness,
     compute_indicator_agreement,
 )
+from core.config import AppConfig
 from core.types import (
     ClarityScore,
     IndicatorResult,
@@ -387,3 +388,107 @@ class TestDataCompletenessPenalty:
         )
         completeness_contribution = 0.2 * (1 / 250)
         assert abs(score.composite - completeness_contribution) < 0.001
+
+
+from unittest.mock import MagicMock, patch
+
+from execution.telegram_bot import TelegramBot
+from storage.database import Database
+from tests.conftest import _default_sentiment_fields
+
+
+def _make_scheduler(config: AppConfig, chart_agent: ChartAgent):
+    from core.scheduler import TradingScheduler
+
+    with patch("core.scheduler.get_provider") as mock_get_prov:
+        provider = MagicMock()
+        provider.get_ohlc.return_value = []
+        mock_get_prov.return_value = provider
+        db = Database(config)
+        bot = MagicMock(spec=TelegramBot)
+        scheduler = TradingScheduler(config, db, bot)
+    scheduler._chart_agent = chart_agent
+    return scheduler
+
+
+class TestMTFConfirmation:
+    def _make_analysis(self, timeframe: str, trend_direction: str) -> TimeframeAnalysis:
+        if trend_direction == "bullish":
+            indicators = _bullish_indicators()
+        elif trend_direction == "bearish":
+            indicators = _bearish_indicators()
+        else:
+            indicators = _neutral_indicators()
+        return TimeframeAnalysis(
+            timeframe=timeframe,
+            indicators=indicators,
+            patterns=_neutral_patterns(),
+            clarity=ClarityScore(
+                timeframe=timeframe,
+                indicator_agreement=0.5,
+                pattern_confidence=0.0,
+                data_completeness=1.0,
+            ),
+            bars=_make_bars(250),
+            timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+        )
+
+    def test_get_trend_consensus_empty(self):
+        agent = ChartAgent()
+        result = agent.get_trend_consensus("1h")
+        assert result == {"total": 0, "bullish": 0, "bearish": 0, "neutral": 0}
+
+    def test_get_trend_consensus_partial(self):
+        agent = ChartAgent()
+        agent._analyses["5m"] = self._make_analysis("5m", "bullish")
+        agent._analyses["1h"] = self._make_analysis("1h", "bearish")
+        result = agent.get_trend_consensus("1h")
+        assert result == {"total": 1, "bullish": 1, "bearish": 0, "neutral": 0}
+
+    def test_get_trend_consensus_full(self):
+        agent = ChartAgent()
+        agent._analyses["5m"] = self._make_analysis("5m", "bullish")
+        agent._analyses["15m"] = self._make_analysis("15m", "bullish")
+        agent._analyses["1h"] = self._make_analysis("1h", "bearish")
+        agent._analyses["4h"] = self._make_analysis("4h", "neutral")
+        result = agent.get_trend_consensus("1h")
+        assert result["total"] == 3
+        assert result["bullish"] == 2
+        assert result["bearish"] == 0
+        assert result["neutral"] == 1
+
+    def test_cold_start_allows_through(self, test_config):
+        agent = ChartAgent()
+        agent._analyses["1h"] = self._make_analysis("1h", "bullish")
+        scheduler = _make_scheduler(test_config, agent)
+        assert scheduler._check_mtf_agreement("BUY", agent._analyses["1h"]) is True
+
+    def test_rejection_insufficient_agreement(self, test_config):
+        agent = ChartAgent()
+        agent._analyses["5m"] = self._make_analysis("5m", "bearish")
+        agent._analyses["15m"] = self._make_analysis("15m", "bearish")
+        agent._analyses["1h"] = self._make_analysis("1h", "bullish")
+        agent._analyses["4h"] = self._make_analysis("4h", "neutral")
+        scheduler = _make_scheduler(test_config, agent)
+        result = scheduler._check_mtf_agreement("BUY", agent._analyses["1h"])
+        assert result is False
+
+    def test_passes_with_sufficient_agreement(self, test_config):
+        agent = ChartAgent()
+        agent._analyses["5m"] = self._make_analysis("5m", "bullish")
+        agent._analyses["15m"] = self._make_analysis("15m", "bullish")
+        agent._analyses["1h"] = self._make_analysis("1h", "bullish")
+        agent._analyses["4h"] = self._make_analysis("4h", "bearish")
+        scheduler = _make_scheduler(test_config, agent)
+        result = scheduler._check_mtf_agreement("BUY", agent._analyses["1h"])
+        assert result is True
+
+    def test_disabled_allows_through(self, test_config):
+        from dataclasses import replace
+
+        config = replace(test_config, mtf_confirmation_enabled=False)
+        agent = ChartAgent()
+        agent._analyses["5m"] = self._make_analysis("5m", "bearish")
+        agent._analyses["1h"] = self._make_analysis("1h", "bullish")
+        scheduler = _make_scheduler(config, agent)
+        assert scheduler._check_mtf_agreement("BUY", agent._analyses["1h"]) is True
