@@ -152,15 +152,15 @@ def build_sequences(
     return np.array(features, dtype=np.float32)
 
 
-def _parse_output(raw: np.ndarray) -> PricePrediction:
+def _parse_output(raw: np.ndarray, direction_threshold: float) -> PricePrediction:
     direction_logit = float(raw[0])
     volatility = max(0.0, float(raw[1]))
     trend_strength = max(0.0, min(1.0, float(raw[2])))
 
-    if direction_logit > 0.5:
+    if direction_logit > direction_threshold:
         direction = "BUY"
         confidence = min(direction_logit, 1.0)
-    elif direction_logit < -0.5:
+    elif direction_logit < -direction_threshold:
         direction = "SELL"
         confidence = min(abs(direction_logit), 1.0)
     else:
@@ -203,9 +203,11 @@ class LSTMWrapper:
             logger.info("No trained LSTM model found at %s", model_file)
             return
         try:
-            self._model = torch.load(
-                model_file, map_location=self._device, weights_only=False
+            self._model = LSTMNet().to(self._device)
+            state_dict = torch.load(
+                model_file, map_location=self._device, weights_only=True
             )
+            self._model.load_state_dict(state_dict)
             self._model.eval()
             logger.info("LSTM model loaded from %s", model_file)
         except Exception as e:
@@ -235,7 +237,7 @@ class LSTMWrapper:
                 output = self._model(input_tensor)
                 raw = output.cpu().numpy()[0]
 
-            return _parse_output(raw)
+            return _parse_output(raw, self._config.lstm_direction_threshold)
         except Exception as e:
             logger.warning("LSTM prediction failed: %s", e)
             return _neutral_prediction()
@@ -337,7 +339,7 @@ class LSTMWrapper:
         model_dir = self._config.lstm_model_path
         os.makedirs(model_dir, exist_ok=True)
         model_path = os.path.join(model_dir, "lstm.pt")
-        torch.save(model, model_path)
+        torch.save(model.state_dict(), model_path)
 
         self._model = model
 

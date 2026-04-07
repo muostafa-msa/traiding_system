@@ -149,36 +149,36 @@ class TestBuildSequences:
 class TestParseOutput:
     def test_buy_direction(self):
         raw = np.array([0.8, 0.1, 0.7])
-        pred = _parse_output(raw)
+        pred = _parse_output(raw, direction_threshold=0.15)
         assert pred.direction == "BUY"
         assert pred.confidence > 0.0
 
     def test_sell_direction(self):
         raw = np.array([-0.8, 0.05, 0.3])
-        pred = _parse_output(raw)
+        pred = _parse_output(raw, direction_threshold=0.15)
         assert pred.direction == "SELL"
         assert pred.confidence > 0.0
 
     def test_neutral_direction(self):
         raw = np.array([0.1, 0.02, 0.5])
-        pred = _parse_output(raw)
+        pred = _parse_output(raw, direction_threshold=0.15)
         assert pred.direction == "NEUTRAL"
 
     def test_output_bounds(self):
         raw = np.array([1.5, -0.1, 1.2])
-        pred = _parse_output(raw)
+        pred = _parse_output(raw, direction_threshold=0.15)
         assert 0.0 <= pred.confidence <= 1.0
         assert pred.volatility >= 0.0
         assert 0.0 <= pred.trend_strength <= 1.0
 
     def test_negative_volatility_clamped(self):
         raw = np.array([0.0, -5.0, 0.5])
-        pred = _parse_output(raw)
+        pred = _parse_output(raw, direction_threshold=0.15)
         assert pred.volatility == 0.0
 
     def test_trend_strength_clamped(self):
         raw = np.array([0.0, 0.0, 2.0])
-        pred = _parse_output(raw)
+        pred = _parse_output(raw, direction_threshold=0.15)
         assert pred.trend_strength == 1.0
 
 

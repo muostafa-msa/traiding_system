@@ -10,6 +10,7 @@ from core.types import (
     FeatureVector,
     IndicatorResult,
     MacroSentiment,
+    OpportunityScore,
     PatternDetectionResult,
     PricePrediction,
     SignalDecision,
@@ -159,11 +160,45 @@ def _bb_position(indicators, close: float) -> float:
     return (close - indicators.bb_lower) / bb_range
 
 
+def compute_opportunity_score(
+    analysis: TimeframeAnalysis,
+    prediction: PricePrediction,
+    sentiment: MacroSentiment,
+    signal_direction: str,
+    mtf_agreement_fraction: float = 0.0,
+) -> OpportunityScore:
+    last_close = analysis.bars[-1].close if analysis.bars else 0.0
+    atr = analysis.indicators.atr
+    if last_close > 0 and atr > 0:
+        volatility_regime = min((atr / last_close) / 0.02, 1.0)
+    else:
+        volatility_regime = 0.0
+
+    if signal_direction == "BUY" and sentiment.macro_score > 0:
+        sentiment_alignment = 1.0
+    elif signal_direction == "SELL" and sentiment.macro_score < 0:
+        sentiment_alignment = 1.0
+    else:
+        sentiment_alignment = 0.0
+
+    return OpportunityScore(
+        trend_strength=prediction.trend_strength,
+        volatility_regime=volatility_regime,
+        pattern_confidence=analysis.patterns.strongest_confidence,
+        prediction_confidence=prediction.confidence,
+        sentiment_alignment=sentiment_alignment,
+        indicator_agreement=analysis.clarity.indicator_agreement,
+        mtf_agreement=mtf_agreement_fraction,
+    )
+
+
 class SignalAgent:
     def __init__(self, config: AppConfig):
         self._config = config
         self._xgboost = XGBoostWrapper(config)
-        self._explanation_model = ExplanationModel(config)
+        self._explanation_model = (
+            ExplanationModel(config) if config.ollama_enabled else None
+        )
         self._recent_decisions: list[tuple[datetime, SignalDecision]] = []
 
     def decide(
@@ -171,6 +206,7 @@ class SignalAgent:
         analysis: TimeframeAnalysis,
         sentiment: MacroSentiment,
         prediction: PricePrediction,
+        mtf_agreement_fraction: float = 0.0,
     ) -> SignalDecision:
         features = assemble_features(analysis, sentiment, prediction)
 
@@ -209,6 +245,43 @@ class SignalAgent:
             prediction.confidence,
             self._xgboost.is_trained(),
         )
+
+        if self._config.prediction_agreement_enabled and direction != "NO_TRADE":
+            if not self._check_prediction_agreement(direction, prediction):
+                return self._make_no_trade(
+                    features, analysis, probability, scoring_method
+                )
+
+        if self._config.opportunity_score_enabled and direction != "NO_TRADE":
+            score = compute_opportunity_score(
+                analysis, prediction, sentiment, direction, mtf_agreement_fraction
+            )
+            if score.composite < self._config.opportunity_score_threshold:
+                logger.info(
+                    "AUDIT opportunity_score: REJECTED direction=%s composite=%.4f "
+                    "threshold=%.2f trend_strength=%.3f volatility_regime=%.3f "
+                    "pattern_confidence=%.3f prediction_confidence=%.3f "
+                    "sentiment_alignment=%.3f indicator_agreement=%.3f "
+                    "mtf_agreement=%.3f",
+                    direction,
+                    score.composite,
+                    self._config.opportunity_score_threshold,
+                    score.trend_strength,
+                    score.volatility_regime,
+                    score.pattern_confidence,
+                    score.prediction_confidence,
+                    score.sentiment_alignment,
+                    score.indicator_agreement,
+                    score.mtf_agreement,
+                )
+                return self._make_no_trade(
+                    features, analysis, probability, scoring_method
+                )
+            logger.info(
+                "AUDIT opportunity_score: PASSED direction=%s composite=%.4f",
+                direction,
+                score.composite,
+            )
 
         if probability < self._config.signal_threshold:
             return self._make_no_trade(features, analysis, probability, scoring_method)
@@ -251,6 +324,29 @@ class SignalAgent:
         )
 
         return decision
+
+    def _check_prediction_agreement(
+        self, direction: str, prediction: PricePrediction
+    ) -> bool:
+        if prediction.confidence == 0.0 and prediction.direction == "NEUTRAL":
+            logger.info(
+                "AUDIT prediction_agreement: bypassed (LSTM unavailable) "
+                "signal_direction=%s prediction_direction=%s prediction_confidence=%.4f",
+                direction,
+                prediction.direction,
+                prediction.confidence,
+            )
+            return True
+        if prediction.direction == direction:
+            return True
+        logger.info(
+            "AUDIT prediction_agreement: REJECTED signal_direction=%s "
+            "prediction_direction=%s prediction_confidence=%.4f",
+            direction,
+            prediction.direction,
+            prediction.confidence,
+        )
+        return False
 
     def _generate_explanation(
         self,

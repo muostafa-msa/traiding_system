@@ -88,19 +88,64 @@ def format_performance_summary(summary: dict) -> str:
     )
 
 
-def format_trade_signal(signal: TradeSignal, risk: RiskVerdict) -> str:
+def format_trade_signal(
+    signal: TradeSignal,
+    risk: RiskVerdict,
+    *,
+    indicators: IndicatorResult | None = None,
+    patterns_summary: str | None = None,
+) -> str:
     dir_emoji = "🟢" if signal.direction == "BUY" else "🔴"
+
+    sl_distance = abs(signal.stop_loss - signal.entry_price)
+    tp_distance = abs(signal.take_profit - signal.entry_price)
+    rr_ratio = tp_distance / sl_distance if sl_distance > 0 else 0.0
+
+    if signal.direction == "SELL":
+        sl_sign = "+"
+        tp_sign = "-"
+    else:
+        sl_sign = "-"
+        tp_sign = "+"
+
+    dollar_risk = risk.position_size * sl_distance
+
     lines = [
-        f"{dir_emoji} GOLD SIGNAL",
-        f"Asset: {signal.asset}",
-        f"Direction: {signal.direction}",
+        f"{dir_emoji} XAU/USD {signal.direction}",
+        "━━━━━━━━━━━━━━━━━━━━━━",
         f"Entry: {signal.entry_price:.2f}",
-        f"Stop Loss: {signal.stop_loss:.2f}",
-        f"Take Profit: {signal.take_profit:.2f}",
-        f"Position Size: {risk.position_size:.4f}",
-        f"Confidence: {signal.probability:.0%}",
+        f"Stop Loss: {signal.stop_loss:.2f} ({sl_sign}{sl_distance:.2f})",
+        f"Take Profit: {signal.take_profit:.2f} ({tp_sign}{tp_distance:.2f})",
+        f"Risk:Reward: 1:{rr_ratio:.2f}",
         "",
-        f"── Analysis ──",
-        f"{signal.reasoning}",
+        f"Position: {risk.position_size:.2f} oz (~${dollar_risk:.0f} risk)",
+        f"Confidence: {signal.probability:.0%}",
     ]
+
+    if indicators is not None:
+        macd_desc = _macd_signal_desc(indicators.macd_hist)
+        pat_text = patterns_summary if patterns_summary else "None detected"
+        lines += [
+            "",
+            "── Market Context ──",
+            f"Trend: {indicators.trend_direction.capitalize()}",
+            f"Pattern: {pat_text}",
+            f"RSI: {indicators.rsi:.1f} | MACD: {macd_desc}",
+        ]
+
+    explanation = signal.reasoning.strip() if signal.reasoning else ""
+    lines += [
+        "",
+        "── AI Analysis ──",
+        explanation if explanation else "Analysis unavailable",
+    ]
+
     return "\n".join(lines)
+
+
+def _macd_signal_desc(macd_hist: float) -> str:
+    if macd_hist > 0:
+        return "Bullish crossover"
+    elif macd_hist < 0:
+        return "Bearish crossover"
+    return "Neutral"

@@ -1,6 +1,6 @@
 # traiding_system Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-04-06
+Auto-generated from all feature plans. Last updated: 2026-04-07
 
 ## Active Technologies
 - Python 3.12 + torch (>=2.0), transformers (>=4.30), feedparser (6.0.11, already installed) (002-finbert-sentiment)
@@ -11,6 +11,8 @@ Auto-generated from all feature plans. Last updated: 2026-04-06
 - SQLite (existing `storage/database.py` — extend with backtest tables) (004-backtesting-engine)
 - Python 3.12 (matching existing codebase) + python-telegram-bot (existing), sqlite3 (stdlib), math (stdlib) (005-telegram-performance)
 - SQLite (existing `storage/database.py` — read-only queries, no schema changes) (005-telegram-performance)
+- Python 3.12 (matching existing codebase) + apscheduler, python-telegram-bot, torch, xgboost, numpy (all existing) (006-signal-quality-filters)
+- SQLite (existing `storage/database.py` -- no schema changes needed) (006-signal-quality-filters)
 
 - Python 3.11 + pandas, numpy, ta, requests, python-dotenv, apscheduler, python-telegram-bot, feedparser (Phase 1: core-system-risk)
 - torch, transformers (Phase 2: FinBERT sentiment)
@@ -60,9 +62,9 @@ Python 3.11: Follow standard conventions
 - **GPT-OSS-20B** (`openai/gpt-oss-20b` via Ollama) — trade reasoning/explanation
 
 ## Recent Changes
+- 006-signal-quality-filters: Added Python 3.12 (matching existing codebase) + apscheduler, python-telegram-bot, torch, xgboost, numpy (all existing)
 - 005-telegram-performance: Added Python 3.12 (matching existing codebase) + python-telegram-bot (existing), sqlite3 (stdlib), math (stdlib)
 - 004-backtesting-engine: Added Python 3.12 (matching existing codebase) + pandas (CSV parsing), numpy (metrics), existing pipeline agents (ChartAgent, SignalAgent, PredictionAgent, RiskAgent), existing models (LSTM, XGBoost), vectorbt (optional strategy wrapper)
-- 003-ai-decision-engine: Added Python 3.12 + torch (>=2.0), transformers (>=4.30), scikit-learn, xgboost, pandas, numpy, ta
 
 
 <!-- MANUAL ADDITIONS START -->

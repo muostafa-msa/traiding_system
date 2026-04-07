@@ -14,6 +14,7 @@ from agents.signal_agent import SignalAgent
 from core.config import AppConfig
 from core.logger import get_logger
 from core.types import (
+    IndicatorResult,
     MacroSentiment,
     OHLCBar,
     TimeframeAnalysis,
@@ -22,6 +23,7 @@ from core.types import (
 from data.market_data import MarketDataError, get_provider
 from execution.signal_generator import format_indicator_summary, format_trade_signal
 from execution.telegram_bot import TelegramBot
+from agents.signal_agent import _patterns_summary
 from models.model_manager import ModelManager
 from storage.database import Database
 
@@ -165,8 +167,6 @@ class TradingScheduler:
             message = format_indicator_summary(analysis.indicators, ASSET, timeframe)
             logger.info("Indicator summary for %s:\n%s", timeframe, message)
 
-            self._bot.broadcast(message)
-
             self._run_news_agent()
 
             self._evaluate_signal_if_present(analysis)
@@ -196,7 +196,12 @@ class TradingScheduler:
             prediction.horizon_bars,
         )
 
-        decision = self._signal_agent.decide(analysis, self._last_sentiment, prediction)
+        decision = self._signal_agent.decide(
+            analysis,
+            self._last_sentiment,
+            prediction,
+            mtf_agreement_fraction=self._compute_mtf_fraction(analysis),
+        )
 
         if decision.direction == "NO_TRADE":
             logger.info(
@@ -209,6 +214,15 @@ class TradingScheduler:
                 self._config.signal_threshold,
             )
             return
+
+        if self._config.mtf_confirmation_enabled:
+            if not self._check_mtf_agreement(decision.direction, analysis):
+                logger.info(
+                    "AUDIT mtf_rejected: direction=%s timeframe=%s",
+                    decision.direction,
+                    analysis.timeframe,
+                )
+                return
 
         last_bar = analysis.bars[-1]
         entry_price = last_bar.close
@@ -245,7 +259,79 @@ class TradingScheduler:
             analysis.clarity.composite,
             analysis.timeframe,
         )
-        self.process_signal(signal)
+        self._log_sr_proximity(signal, analysis.indicators)
+        self.process_signal(
+            signal,
+            indicators=analysis.indicators,
+            patterns_summary=_patterns_summary(analysis.patterns),
+        )
+
+    def _log_sr_proximity(
+        self, signal: TradeSignal, indicators: IndicatorResult
+    ) -> None:
+        if signal.direction == "SELL" and signal.entry_price < indicators.support:
+            logger.warning(
+                "Entry %.2f below support %.2f — breakout may have already occurred",
+                signal.entry_price,
+                indicators.support,
+            )
+        elif signal.direction == "BUY" and signal.entry_price > indicators.resistance:
+            logger.warning(
+                "Entry %.2f above resistance %.2f — breakout may have already occurred",
+                signal.entry_price,
+                indicators.resistance,
+            )
+
+    def _check_mtf_agreement(
+        self, signal_direction: str, analysis: TimeframeAnalysis
+    ) -> bool:
+        consensus = self._chart_agent.get_trend_consensus(analysis.timeframe)
+        target = "bullish" if signal_direction == "BUY" else "bearish"
+        agreeing = consensus.get(target, 0)
+
+        if consensus["total"] < self._config.mtf_min_agreeing_timeframes:
+            logger.info(
+                "AUDIT mtf_confirmation: ALLOWED (cold start) signal=%s "
+                "consensus_total=%d < min=%d",
+                signal_direction,
+                consensus["total"],
+                self._config.mtf_min_agreeing_timeframes,
+            )
+            return True
+
+        if agreeing >= self._config.mtf_min_agreeing_timeframes:
+            logger.info(
+                "AUDIT mtf_confirmation: PASSED signal=%s target=%s agreeing=%d "
+                "total=%d bullish=%d bearish=%d neutral=%d",
+                signal_direction,
+                target,
+                agreeing,
+                consensus["total"],
+                consensus["bullish"],
+                consensus["bearish"],
+                consensus["neutral"],
+            )
+            return True
+
+        logger.info(
+            "AUDIT mtf_confirmation: REJECTED signal=%s target=%s agreeing=%d "
+            "needed=%d total=%d bullish=%d bearish=%d neutral=%d",
+            signal_direction,
+            target,
+            agreeing,
+            self._config.mtf_min_agreeing_timeframes,
+            consensus["total"],
+            consensus["bullish"],
+            consensus["bearish"],
+            consensus["neutral"],
+        )
+        return False
+
+    def _compute_mtf_fraction(self, analysis: TimeframeAnalysis) -> float:
+        consensus = self._chart_agent.get_trend_consensus(analysis.timeframe)
+        if consensus["total"] == 0:
+            return 0.0
+        return consensus["total"] / 4.0
 
     def _run_news_agent(self) -> None:
         if self._news_agent is None:
@@ -262,7 +348,12 @@ class TradingScheduler:
         except Exception as e:
             logger.warning("News agent failed: %s", e)
 
-    def process_signal(self, signal: TradeSignal) -> None:
+    def process_signal(
+        self,
+        signal: TradeSignal,
+        indicators: object = None,
+        patterns_summary: str | None = None,
+    ) -> None:
         signal_id = self._db.save_signal(signal, "pending")
         logger.info(
             "Signal saved as pending (id=%d): %s %s",
@@ -275,7 +366,12 @@ class TradingScheduler:
 
         if verdict.approved:
             self._db.update_signal_status(signal_id, "approved")
-            message = format_trade_signal(signal, verdict)
+            message = format_trade_signal(
+                signal,
+                verdict,
+                indicators=indicators,
+                patterns_summary=patterns_summary,
+            )
             self._bot.broadcast(message)
             logger.info("Signal approved and broadcast (id=%d)", signal_id)
         else:

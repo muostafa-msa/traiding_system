@@ -130,3 +130,26 @@ class ChartAgent:
             best.clarity.composite,
         )
         return best
+
+    def get_trend_consensus(self, exclude_timeframe: str) -> dict:
+        bullish = 0
+        bearish = 0
+        neutral = 0
+        total = 0
+        for tf, analysis in self._analyses.items():
+            if tf == exclude_timeframe:
+                continue
+            total += 1
+            trend = analysis.indicators.trend_direction
+            if trend == "bullish":
+                bullish += 1
+            elif trend == "bearish":
+                bearish += 1
+            else:
+                neutral += 1
+        return {
+            "total": total,
+            "bullish": bullish,
+            "bearish": bearish,
+            "neutral": neutral,
+        }

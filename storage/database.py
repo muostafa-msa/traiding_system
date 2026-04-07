@@ -142,7 +142,7 @@ class Database:
         self._db_path = config.db_path
         if self._db_path != ":memory:":
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._db_path)
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA_SQL)

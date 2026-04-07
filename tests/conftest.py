@@ -31,9 +31,10 @@ def _default_sentiment_fields():
         finbert_model_path="models/finbert",
         model_device="auto",
         lstm_model_path="models/lstm",
-        xgboost_model_path="models/xgboost",
+        xgboost_model_path="/tmp/nonexistent_xgboost_test",
         ollama_base_url="http://localhost:11434",
         ollama_model="gpt-oss:20b",
+        ollama_enabled=False,
         fallback_weight_indicators=0.30,
         fallback_weight_patterns=0.20,
         fallback_weight_sentiment=0.25,
@@ -41,7 +42,13 @@ def _default_sentiment_fields():
         explanation_max_tokens=150,
         explanation_temperature=0.7,
         lstm_sequence_length=60,
+        lstm_direction_threshold=0.15,
         decision_window_minutes=15,
+        prediction_agreement_enabled=True,
+        mtf_confirmation_enabled=True,
+        mtf_min_agreeing_timeframes=2,
+        opportunity_score_enabled=True,
+        opportunity_score_threshold=0.55,
     )
 
 
